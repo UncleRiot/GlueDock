@@ -6,6 +6,7 @@ Be part of the development, post feature-requests, bugs, skins, icons, everythin
 [🐞 Issues](https://github.com/UncleRiot/GlueDock/issues)  
 [💬 Discussions](https://github.com/UncleRiot/GlueDock/discussions)
 
+<br><br>
 
 <img width="441" height="194" alt="grafik" src="https://github.com/user-attachments/assets/e9e90c3f-3bf7-4330-b905-19a9a9abb299" />
 
