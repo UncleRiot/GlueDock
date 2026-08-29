@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -40,7 +40,15 @@ public partial class MainWindow : Window
     private const double DockPaddingLength = 20;
 
     private const int GwlExStyle = -20;
+    private const int WsExTopmost = 0x00000008;
     private const int WsExToolWindow = 0x00000080;
+
+    private static readonly nint HwndTopmost = new(-1);
+
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpShowWindow = 0x0040;
 
     private const int DwmwaUseImmersiveDarkMode = 20;
     private const int DwmwaWindowCornerPreference = 33;
@@ -54,6 +62,7 @@ public partial class MainWindow : Window
     private readonly SettingsStore _settingsStore = new();
     private readonly DockItemStore _dockItemStore = new();
     private readonly DispatcherTimer _collapseTimer;
+    private readonly NativeBackdropHost _nativeBackdropHost;
 
     private DockSettings _settings = new();
     private nint _windowHandle;
@@ -64,9 +73,25 @@ public partial class MainWindow : Window
 
     private Point _itemMouseDownPoint;
     private DockItem? _itemMouseDownItem;
+    private DockItem? _activeInternalDragItem;
+    private Point _dragPointerOffset;
+    private int _lastInternalDragIndex = -1;
     private SettingsWindow? _settingsWindow;
+    private AboutWindow? _aboutWindow;
+    private Task<GitHubUpdateResult>? _updateCheckTask;
+    private SubDockWindow? _openSubDock;
+    private DockItem? _hoverSubmenuItem;
+    private FrameworkElement? _hoverSubmenuAnchor;
+    private DockItem? _pinnedSubmenuItem;
+    private DispatcherTimer? _submenuHoverCloseTimer;
+    private int _openContextMenuCount;
+    private DispatcherTimer? _externalDragLeaveTimer;
+    private bool _closingSubDockForRootCollapse;
     private WinForms.NotifyIcon? _notifyIcon;
     private bool _collapseAnimationRunning;
+    private bool _initialBackdropReady;
+    private bool _isSettingsPreviewApply;
+    private Orientation? _itemsOrientation;
     private readonly DispatcherTimer _zoomHoverUnlockTimer;
 
     public ObservableCollection<DockItem> DockItems { get; } = [];
@@ -74,6 +99,22 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        _nativeBackdropHost =
+            new NativeBackdropHost(
+                this);
+
+        AddHandler(
+            ContextMenuService.ContextMenuOpeningEvent,
+            new ContextMenuEventHandler(
+                MainWindow_ContextMenuOpening),
+            true);
+
+        AddHandler(
+            ContextMenuService.ContextMenuClosingEvent,
+            new ContextMenuEventHandler(
+                MainWindow_ContextMenuClosing),
+            true);
 
         DataContext = this;
 
@@ -117,6 +158,46 @@ public partial class MainWindow : Window
     {
         _settings = _settingsStore.Load();
 
+        System.Diagnostics.Debug.WriteLine(
+            $"GlueDock StartupDiagnostics: DebugLoggingEnabled={_settings.DebugLoggingEnabled}; LogFile={DebugLog.ActiveLogPath}; BaseDirectory={AppContext.BaseDirectory}; CurrentDirectory={Environment.CurrentDirectory}");
+
+        DebugLog.SetMaximumActiveLogFileSizeMegabytes(
+            _settings.DebugLogMaxSizeMegabytes);
+
+        DebugLog.SetEnabled(
+            _settings.DebugLoggingEnabled);
+
+        DebugLog.Write(
+            "Root",
+            $"Loaded; Edge={_settings.Edge}; Ratio={_settings.EdgePositionRatio:0.000}; CollapseDisabled={_settings.CollapseDisabled}; Delay={_settings.CollapseDelayMilliseconds}; Labels={_settings.ShowItemLabels}; Scale={_settings.DockScale:0.00}");
+
+        App.Language.Load(
+            _settings.LanguageCode);
+
+        _updateCheckTask =
+            GitHubUpdateService.CheckForUpdateAsync();
+
+        _ = _updateCheckTask.ContinueWith(
+            task =>
+            {
+                if (task.Status ==
+                    TaskStatus.RanToCompletion)
+                {
+                    GitHubUpdateResult result =
+                        task.Result;
+
+                    DebugLog.Write(
+                        "Update",
+                        $"Startup check completed; Available={result.UpdateAvailable}; Latest={result.LatestVersion}; Error={result.ErrorKind}");
+                }
+            },
+            TaskScheduler.Default);
+
+        App.Language.LanguageChanged +=
+            Language_LanguageChanged;
+
+        ApplyLanguage();
+
         _collapseTimer.Interval =
             TimeSpan.FromMilliseconds(
                 Math.Max(
@@ -125,37 +206,45 @@ public partial class MainWindow : Window
 
         bool migratedItems = false;
 
-        foreach (string path in _settings.Items.ToList())
+        if (_settings.DockItems.Count > 0)
         {
-            if (!File.Exists(path) &&
-                !Directory.Exists(path))
+            foreach (DockEntrySettings entry in _settings.DockItems)
             {
-                continue;
+                DockItems.Add(CreateDockItem(entry));
             }
-
-            string managedPath =
-                path;
-
-            if (!_dockItemStore.IsManagedPath(path))
+        }
+        else
+        {
+            foreach (string path in _settings.Items.ToList())
             {
-                try
+                if (!File.Exists(path) &&
+                    !Directory.Exists(path))
                 {
-                    managedPath =
-                        _dockItemStore.Import(path);
+                    continue;
+                }
 
-                    migratedItems = true;
-                }
-                catch
+                string managedPath = path;
+
+                if (!_dockItemStore.IsManagedPath(path))
                 {
-                    managedPath = path;
+                    try
+                    {
+                        managedPath = _dockItemStore.Import(path);
+                        migratedItems = true;
+                    }
+                    catch
+                    {
+                        managedPath = path;
+                    }
                 }
+
+                DockItems.Add(CreateDockItem(managedPath));
             }
-
-            DockItems.Add(
-                CreateDockItem(managedPath));
         }
 
-        if (migratedItems)
+        if (migratedItems ||
+            (_settings.DockItems.Count == 0 &&
+             DockItems.Count > 0))
         {
             SaveSettings();
         }
@@ -167,6 +256,9 @@ public partial class MainWindow : Window
 
         UpdateItemsOrientation();
         ApplyAppearance();
+        UpdateItemLabelVisibility();
+        UpdateDockItemPreviews();
+        _openSubDock?.ApplySettingsLive();
 
         if (_settings.CollapseDisabled)
         {
@@ -176,28 +268,82 @@ public partial class MainWindow : Window
         {
             Collapse(immediate: true);
         }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                EnsureDockTopmost();
+                UpdateWindowBounds();
+
+                _initialBackdropReady = true;
+
+                _nativeBackdropHost.SetBlur(
+                    _settings.BlurRadius);
+
+                _nativeBackdropHost.Sync();
+            },
+            DispatcherPriority.Loaded);
     }
 
     private void InitializeTrayIcon()
     {
         if (_notifyIcon is not null)
         {
+            UpdateTrayMenuLanguage();
             return;
         }
+
+        string applicationIconPath =
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "Resources",
+                "GlueDock.ico");
+
+        Drawing.Icon applicationIcon =
+            System.IO.File.Exists(
+                applicationIconPath)
+                ? new Drawing.Icon(
+                    applicationIconPath)
+                : Drawing.SystemIcons.Application;
 
         _notifyIcon =
             new WinForms.NotifyIcon
             {
-                Text = "GlueDock",
+                Text = App.Language["App.Name"],
                 Visible = true,
-                Icon = Drawing.SystemIcons.Application
+                Icon = applicationIcon
             };
+
+        _notifyIcon.DoubleClick +=
+            (_, _) =>
+            {
+                Dispatcher.Invoke(
+                    () =>
+                    {
+                        Show();
+                        Activate();
+                        Expand();
+                    });
+            };
+
+        UpdateTrayMenuLanguage();
+    }
+
+    private void UpdateTrayMenuLanguage()
+    {
+        if (_notifyIcon is null)
+        {
+            return;
+        }
+
+        WinForms.ContextMenuStrip? oldMenu =
+            _notifyIcon.ContextMenuStrip;
 
         WinForms.ContextMenuStrip menu =
             new();
 
         WinForms.ToolStripMenuItem showItem =
-            new("Anzeigen");
+            new(App.Language["Context.Show"]);
 
         showItem.Click +=
             (_, _) =>
@@ -212,7 +358,7 @@ public partial class MainWindow : Window
             };
 
         WinForms.ToolStripMenuItem settingsItem =
-            new("Einstellungen");
+            new(App.Language["Context.Settings"]);
 
         settingsItem.Click +=
             (_, _) =>
@@ -227,7 +373,7 @@ public partial class MainWindow : Window
             };
 
         WinForms.ToolStripMenuItem exitItem =
-            new("Beenden");
+            new(App.Language["Context.Exit"]);
 
         exitItem.Click +=
             (_, _) =>
@@ -241,28 +387,69 @@ public partial class MainWindow : Window
 
         menu.Items.Add(showItem);
         menu.Items.Add(settingsItem);
-        menu.Items.Add(new WinForms.ToolStripSeparator());
+        menu.Items.Add(
+            new WinForms.ToolStripSeparator());
         menu.Items.Add(exitItem);
 
-        _notifyIcon.ContextMenuStrip = menu;
+        _notifyIcon.ContextMenuStrip =
+            menu;
 
-        _notifyIcon.DoubleClick +=
-            (_, _) =>
+        oldMenu?.Dispose();
+    }
+
+    private void Language_LanguageChanged(
+        object? sender,
+        EventArgs e)
+    {
+        Dispatcher.Invoke(
+            () =>
             {
-                Dispatcher.Invoke(
-                    () =>
-                    {
-                        Show();
-                        Activate();
-                        Expand();
-                    });
-            };
+                ApplyLanguage();
+                UpdateTrayMenuLanguage();
+            });
+    }
+
+    private void ApplyLanguage()
+    {
+        Title =
+            App.Language["App.Name"];
+
+        NewSubmenuContextMenuItem.Header =
+            App.Language["Submenu.New"];
+
+        SettingsContextMenuItem.Header =
+            App.Language["Context.Settings"];
+
+        AboutContextMenuItem.Header =
+            App.Language["Context.About"];
+
+        ExitContextMenuItem.Header =
+            App.Language["Context.Exit"];
+
+        if (ContextMenu is not null)
+        {
+            ContextMenu.Language =
+                System.Windows.Markup.XmlLanguage.GetLanguage(
+                    System.Globalization.CultureInfo.CurrentUICulture.IetfLanguageTag);
+        }
     }
 
     private void MainWindow_Closed(
         object? sender,
         EventArgs e)
     {
+        App.Language.LanguageChanged -=
+            Language_LanguageChanged;
+
+        DebugLog.Write(
+            "Root",
+            "Main window closed.");
+
+        _openSubDock?.Close();
+        _openSubDock = null;
+
+        DebugLog.Shutdown();
+
         if (_notifyIcon is null)
         {
             return;
@@ -277,6 +464,10 @@ public partial class MainWindow : Window
         object sender,
         MouseEventArgs e)
     {
+        DebugLog.Write(
+            "Root",
+            "MouseEnter");
+
         _collapseTimer.Stop();
 
         if (_settings.CollapseDisabled)
@@ -312,10 +503,22 @@ public partial class MainWindow : Window
         object sender,
         MouseEventArgs e)
     {
+        LogRootState(
+            "MouseLeave");
+
         if (_settings.CollapseDisabled ||
             _isWindowDragging ||
-            _isExternalDragActive)
+            _isExternalDragActive ||
+            _activeInternalDragItem is not null ||
+            _openContextMenuCount > 0)
         {
+            _collapseTimer.Stop();
+            return;
+        }
+
+        if (_openSubDock?.IsPointerOverDockChain == true)
+        {
+            _collapseTimer.Stop();
             return;
         }
 
@@ -326,15 +529,44 @@ public partial class MainWindow : Window
         object? sender,
         EventArgs e)
     {
+        LogRootState(
+            "Collapse timer tick");
+
         _collapseTimer.Stop();
 
-        if (!_settings.CollapseDisabled &&
-            !_isWindowDragging &&
-            !_isExternalDragActive &&
-            !IsMouseOver)
+        if (_settings.CollapseDisabled ||
+            _isWindowDragging ||
+            _isExternalDragActive ||
+            _activeInternalDragItem is not null ||
+            _openContextMenuCount > 0 ||
+            IsMouseOver ||
+            _openSubDock?.IsPointerOverDockChain == true)
         {
-            Collapse(immediate: false);
+            return;
         }
+
+        if (_openSubDock is not null)
+        {
+            DebugLog.Write(
+                "SubDock",
+                "Closing complete submenu chain before root collapse.");
+
+            _closingSubDockForRootCollapse = true;
+
+            try
+            {
+                _openSubDock.Close();
+                _openSubDock = null;
+            }
+            finally
+            {
+                _closingSubDockForRootCollapse = false;
+            }
+        }
+
+        _collapseTimer.Stop();
+
+        Collapse(immediate: false);
     }
 
     private void RestartCollapseTimer()
@@ -346,6 +578,9 @@ public partial class MainWindow : Window
                     0,
                     _settings.CollapseDelayMilliseconds));
         _collapseTimer.Start();
+
+        LogRootState(
+            "Collapse timer restarted");
     }
 
     private void MainWindow_PreviewMouseLeftButtonDown(
@@ -365,7 +600,17 @@ public partial class MainWindow : Window
         }
 
         _collapseTimer.Stop();
+
+        if (_openSubDock is not null)
+        {
+            _openSubDock.Close();
+            _openSubDock = null;
+        }
+
         _isWindowDragging = true;
+
+        LogRootState(
+            "Root drag started");
 
         try
         {
@@ -380,9 +625,333 @@ public partial class MainWindow : Window
         }
 
         SnapToNearestEdge();
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                UpdateItemLabelVisibility();
+
+                DebugLog.Write(
+                    "Labels",
+                    "Root labels refreshed after dock move.");
+            },
+            DispatcherPriority.Loaded);
+
+        LogRootState(
+            "Root drag finished");
+
         SaveSettings();
 
         e.Handled = true;
+    }
+
+    private void ApplyDockItemHoverEffect(
+        FrameworkElement element)
+    {
+        if (element is not Border border)
+        {
+            return;
+        }
+
+        ResetDockItemHoverEffect(
+            border);
+
+        string hoverEffect =
+            _settings.HoverEffect ?? "None";
+
+        switch (hoverEffect)
+        {
+            case "Zoom":
+            {
+                border.RenderTransformOrigin =
+                    new Point(
+                        0.5,
+                        0.5);
+
+                ScaleTransform transform =
+                    new(
+                        1.0,
+                        1.0);
+
+                border.RenderTransform =
+                    transform;
+
+                DoubleAnimation animation =
+                    new(
+                        1.0,
+                        1.12,
+                        new Duration(
+                            TimeSpan.FromMilliseconds(
+                                120)))
+                    {
+                        EasingFunction =
+                            new CubicEase
+                            {
+                                EasingMode =
+                                    EasingMode.EaseOut
+                            }
+                    };
+
+                transform.BeginAnimation(
+                    ScaleTransform.ScaleXProperty,
+                    animation);
+
+                transform.BeginAnimation(
+                    ScaleTransform.ScaleYProperty,
+                    animation);
+
+                break;
+            }
+
+            case "Glow":
+            {
+                Color glowColor =
+                    Colors.White;
+
+                if (Resources["DockTextBrush"] is SolidColorBrush glowBrush)
+                {
+                    glowColor =
+                        glowBrush.Color;
+                }
+
+                border.Effect =
+                    new System.Windows.Media.Effects.DropShadowEffect
+                    {
+                        Color =
+                            glowColor,
+                        BlurRadius =
+                            18,
+                        ShadowDepth =
+                            0,
+                        Opacity =
+                            0.85
+                    };
+
+                break;
+            }
+
+            case "Highlight":
+            {
+                Border? highlight =
+                    FindVisualChild<Border>(
+                        border,
+                        "DockItemHighlight");
+
+                if (highlight is not null)
+                {
+                    highlight.Background =
+                        Resources["DockItemBackgroundBrush"] as System.Windows.Media.Brush ??
+                        Brushes.Transparent;
+
+                    highlight.BorderBrush =
+                        Resources["DockItemBorderBrush"] as System.Windows.Media.Brush ??
+                        Brushes.Transparent;
+                }
+
+                break;
+            }
+        }
+    }
+
+    private static void ResetDockItemHoverEffect(
+        FrameworkElement element)
+    {
+        if (element is not Border border)
+        {
+            return;
+        }
+
+        if (border.RenderTransform is ScaleTransform transform)
+        {
+            transform.BeginAnimation(
+                ScaleTransform.ScaleXProperty,
+                null);
+
+            transform.BeginAnimation(
+                ScaleTransform.ScaleYProperty,
+                null);
+        }
+
+        border.RenderTransform =
+            Transform.Identity;
+
+        border.Effect =
+            null;
+
+        border.Background =
+            Brushes.Transparent;
+
+        border.BorderBrush =
+            Brushes.Transparent;
+
+        Border? highlight =
+            FindVisualChild<Border>(
+                border,
+                "DockItemHighlight");
+
+        if (highlight is not null)
+        {
+            highlight.Background =
+                Brushes.Transparent;
+
+            highlight.BorderBrush =
+                Brushes.Transparent;
+        }
+    }
+
+    private void RefreshDockItemHoverEffects()
+    {
+        for (int index = 0;
+             index < DockItemsControl.Items.Count;
+             index++)
+        {
+            if (DockItemsControl.ItemContainerGenerator.ContainerFromIndex(index)
+                is not DependencyObject container)
+            {
+                continue;
+            }
+
+            Border? border =
+                FindVisualChild<Border>(
+                    container,
+                    "DockItemBorder");
+
+            if (border is null)
+            {
+                continue;
+            }
+
+            ResetDockItemHoverEffect(
+                border);
+
+            if (border.IsMouseOver)
+            {
+                ApplyDockItemHoverEffect(
+                    border);
+            }
+        }
+    }
+
+    private void DockItem_MouseEnter(
+        object sender,
+        MouseEventArgs e)
+    {
+        if (sender is not FrameworkElement element ||
+            element.DataContext is not DockItem item)
+        {
+            return;
+        }
+
+        ApplyDockItemHoverEffect(
+            element);
+
+        if (_isWindowDragging ||
+            !item.IsSubmenu)
+        {
+            return;
+        }
+
+        if (_pinnedSubmenuItem is not null &&
+            !ReferenceEquals(
+                _pinnedSubmenuItem,
+                item))
+        {
+            return;
+        }
+
+        StopSubmenuHoverCloseTimer();
+
+        _hoverSubmenuItem = item;
+        _hoverSubmenuAnchor = element;
+
+        OpenSubmenu(
+            item,
+            element);
+    }
+
+    private void DockItem_MouseLeave(
+        object sender,
+        MouseEventArgs e)
+    {
+        if (sender is not FrameworkElement element ||
+            element.DataContext is not DockItem item)
+        {
+            return;
+        }
+
+        ResetDockItemHoverEffect(
+            element);
+
+        if (!item.IsSubmenu ||
+            !ReferenceEquals(
+                _hoverSubmenuItem,
+                item) ||
+            ReferenceEquals(
+                _pinnedSubmenuItem,
+                item))
+        {
+            return;
+        }
+
+        StartSubmenuHoverCloseTimer();
+    }
+
+    private void StartSubmenuHoverCloseTimer()
+    {
+        _submenuHoverCloseTimer ??=
+            new DispatcherTimer();
+
+        _submenuHoverCloseTimer.Interval =
+            TimeSpan.FromMilliseconds(
+                Math.Max(
+                    0,
+                    _settings.SubdockCollapseDelayMilliseconds));
+
+        _submenuHoverCloseTimer.Tick -=
+            SubmenuHoverCloseTimer_Tick;
+
+        _submenuHoverCloseTimer.Tick +=
+            SubmenuHoverCloseTimer_Tick;
+
+        _submenuHoverCloseTimer.Stop();
+        _submenuHoverCloseTimer.Start();
+    }
+
+    private void StopSubmenuHoverCloseTimer()
+    {
+        _submenuHoverCloseTimer?.Stop();
+    }
+
+    private void SubmenuHoverCloseTimer_Tick(
+        object? sender,
+        EventArgs e)
+    {
+        StopSubmenuHoverCloseTimer();
+
+        if (_pinnedSubmenuItem is not null ||
+            _isExternalDragActive ||
+            _activeInternalDragItem is not null ||
+            _hoverSubmenuAnchor?.IsMouseOver == true ||
+            _openSubDock?.IsPointerOverDockChain == true)
+        {
+            return;
+        }
+
+        if (_openSubDock?.IsVisible == true &&
+            _hoverSubmenuItem is not null &&
+            ReferenceEquals(
+                _openSubDock.Tag,
+                _hoverSubmenuItem))
+        {
+            DebugLog.Write(
+                "SubDock",
+                $"Closing hover-opened submenu; Name={_hoverSubmenuItem.DisplayName}");
+
+            _openSubDock.CloseAnimated();
+        }
+
+        _hoverSubmenuItem = null;
+        _hoverSubmenuAnchor = null;
     }
 
     private void DockItem_PreviewMouseLeftButtonDown(
@@ -398,6 +967,9 @@ public partial class MainWindow : Window
         _itemMouseDownItem = item;
         _itemMouseDownPoint =
             e.GetPosition(this);
+
+        _dragPointerOffset =
+            e.GetPosition(element);
 
         _suppressNextItemClick = false;
         e.Handled = true;
@@ -442,17 +1014,60 @@ public partial class MainWindow : Window
             InternalDragFormat,
             draggedItem);
 
-        dragData.SetData(
-            DataFormats.FileDrop,
-            new[]
-            {
-                draggedItem.Path
-            });
+        if (!draggedItem.IsSubmenu &&
+            !string.IsNullOrWhiteSpace(draggedItem.Path))
+        {
+            dragData.SetData(
+                DataFormats.FileDrop,
+                new[]
+                {
+                    draggedItem.Path
+                });
+        }
 
-        DragDrop.DoDragDrop(
-            this,
-            dragData,
-            DragDropEffects.Copy);
+        _activeInternalDragItem =
+            draggedItem;
+
+        _lastInternalDragIndex =
+            DockItems.IndexOf(
+                draggedItem);
+
+        ShowInternalDragGhost(
+            draggedItem);
+
+        SetInternalDragItemVisibility(
+            draggedItem,
+            visible: false);
+
+        try
+        {
+            DragDrop.DoDragDrop(
+                this,
+                dragData,
+                DragDropEffects.Copy);
+        }
+        finally
+        {
+            SetInternalDragItemVisibility(
+                draggedItem,
+                visible: true);
+
+            ResetInternalDragItemTransforms();
+
+            HideInternalDragGhost();
+            _activeInternalDragItem = null;
+            _lastInternalDragIndex = -1;
+
+            if (!_settings.CollapseDisabled &&
+                !_isWindowDragging &&
+                !_isExternalDragActive &&
+                _openContextMenuCount == 0 &&
+                !IsMouseOver &&
+                _openSubDock?.IsPointerOverDockChain != true)
+            {
+                RestartCollapseTimer();
+            }
+        }
     }
 
     private void DockItem_PreviewMouseLeftButtonUp(
@@ -482,7 +1097,47 @@ public partial class MainWindow : Window
                 pressedItem,
                 item))
         {
-            LaunchDockItem(item);
+            if (item.IsSubmenu)
+            {
+                StopSubmenuHoverCloseTimer();
+
+                if (ReferenceEquals(
+                        _pinnedSubmenuItem,
+                        item) &&
+                    _openSubDock?.IsVisible == true &&
+                    ReferenceEquals(
+                        _openSubDock.Tag,
+                        item))
+                {
+                    DebugLog.Write(
+                        "SubDock",
+                        $"Unpin and close submenu by click; Name={item.DisplayName}");
+
+                    _pinnedSubmenuItem = null;
+                    _hoverSubmenuItem = null;
+                    _hoverSubmenuAnchor = null;
+
+                    _openSubDock.CloseAnimated();
+                }
+                else
+                {
+                    _hoverSubmenuItem = item;
+                    _hoverSubmenuAnchor = element;
+                    _pinnedSubmenuItem = item;
+
+                    OpenSubmenu(
+                        item,
+                        element);
+
+                    DebugLog.Write(
+                        "SubDock",
+                        $"Submenu pinned by click; Name={item.DisplayName}");
+                }
+            }
+            else
+            {
+                LaunchDockItem(item);
+            }
         }
 
         e.Handled = true;
@@ -492,20 +1147,122 @@ public partial class MainWindow : Window
         object sender,
         DragEventArgs e)
     {
-        _isExternalDragActive =
+        bool externalDrag =
             !e.Data.GetDataPresent(
                 InternalDragFormat);
 
-        _collapseTimer.Stop();
-        Expand();
+        if (externalDrag)
+        {
+            StopExternalDragLeaveTimer();
+
+            if (!_isExternalDragActive)
+            {
+                _isExternalDragActive = true;
+
+                DebugLog.Write(
+                    "RootDrag",
+                    "External drag entered root dock.");
+
+                Expand();
+            }
+
+            _collapseTimer.Stop();
+        }
 
         SetDropEffect(e);
+    }
+
+    private void StartExternalDragLeaveTimer()
+    {
+        _externalDragLeaveTimer ??=
+            new DispatcherTimer
+            {
+                Interval =
+                    TimeSpan.FromMilliseconds(
+                        120)
+            };
+
+        _externalDragLeaveTimer.Tick -=
+            ExternalDragLeaveTimer_Tick;
+
+        _externalDragLeaveTimer.Tick +=
+            ExternalDragLeaveTimer_Tick;
+
+        _externalDragLeaveTimer.Stop();
+        _externalDragLeaveTimer.Start();
+    }
+
+    private void StopExternalDragLeaveTimer()
+    {
+        _externalDragLeaveTimer?.Stop();
+    }
+
+    private void ExternalDragLeaveTimer_Tick(
+        object? sender,
+        EventArgs e)
+    {
+        StopExternalDragLeaveTimer();
+
+        if (_openSubDock?.IsPointerOverDockChain == true)
+        {
+            _collapseTimer.Stop();
+            return;
+        }
+
+        if (_isExternalDragActive)
+        {
+            _isExternalDragActive = false;
+
+            DebugLog.Write(
+                "RootDrag",
+                "External drag left root dock after debounce.");
+        }
+
+        if (!_settings.CollapseDisabled &&
+            _openContextMenuCount == 0 &&
+            !IsMouseOver &&
+            _openSubDock?.IsPointerOverDockChain != true)
+        {
+            RestartCollapseTimer();
+        }
     }
 
     private void MainWindow_DragOver(
         object sender,
         DragEventArgs e)
     {
+        if (e.Data.GetDataPresent(
+                InternalDragFormat) &&
+            e.Data.GetData(
+                InternalDragFormat) is DockItem draggedItem)
+        {
+            Point pointerPosition =
+                e.GetPosition(
+                    DockItemsControl);
+
+            UpdateInternalDragVisual(
+                pointerPosition);
+
+            UpdateInternalDragPosition(
+                draggedItem,
+                pointerPosition);
+        }
+        else if (e.Data.GetDataPresent(
+                     DataFormats.FileDrop))
+        {
+            FrameworkElement? submenuElement =
+                FindSubmenuElementAtPosition(
+                    e.GetPosition(
+                        DockItemsControl));
+
+            if (submenuElement?.DataContext is DockItem submenuItem)
+            {
+                OpenSubmenu(
+                    submenuItem,
+                    submenuElement);
+            }
+        }
+
         SetDropEffect(e);
     }
 
@@ -513,13 +1270,13 @@ public partial class MainWindow : Window
         object sender,
         DragEventArgs e)
     {
-        _isExternalDragActive = false;
-
-        if (!_settings.CollapseDisabled &&
-            !IsMouseOver)
+        if (e.Data.GetDataPresent(
+                InternalDragFormat))
         {
-            RestartCollapseTimer();
+            return;
         }
+
+        StartExternalDragLeaveTimer();
     }
 
     private void MainWindow_Drop(
@@ -531,12 +1288,8 @@ public partial class MainWindow : Window
             if (e.Data.GetDataPresent(
                     InternalDragFormat) &&
                 e.Data.GetData(
-                    InternalDragFormat) is DockItem draggedItem)
+                    InternalDragFormat) is DockItem)
             {
-                ReorderDockItem(
-                    draggedItem,
-                    e.OriginalSource as DependencyObject);
-
                 e.Effects =
                     DragDropEffects.Copy;
 
@@ -549,7 +1302,34 @@ public partial class MainWindow : Window
                 e.Data.GetData(
                     DataFormats.FileDrop) is string[] paths)
             {
-                AddDroppedItems(paths);
+                FrameworkElement? submenuElement =
+                    FindSubmenuElementAtPosition(
+                        e.GetPosition(
+                            DockItemsControl));
+
+                if (submenuElement?.DataContext is DockItem submenuItem)
+                {
+                    AddDroppedItemsToSubmenu(
+                        paths,
+                        submenuItem);
+
+                    if (_openSubDock?.IsVisible == true &&
+                        ReferenceEquals(
+                            _openSubDock.Tag,
+                            submenuItem))
+                    {
+                        _openSubDock.RefreshItemsLayout();
+                    }
+
+                    DebugLog.Write(
+                        "RootDrag",
+                        $"External drop added directly to submenu; Name={submenuItem.DisplayName}; Items={submenuItem.Children.Count}");
+                }
+                else
+                {
+                    AddDroppedItems(
+                        paths);
+                }
 
                 e.Effects =
                     DragDropEffects.Copy;
@@ -559,11 +1339,20 @@ public partial class MainWindow : Window
         }
         finally
         {
+            StopExternalDragLeaveTimer();
+
             _isExternalDragActive = false;
+
+            DebugLog.Write(
+                "RootDrag",
+                "External/internal drop finalized on root dock.");
+
             SaveSettings();
 
             if (!_settings.CollapseDisabled &&
-                !IsMouseOver)
+                _openContextMenuCount == 0 &&
+                !IsMouseOver &&
+                _openSubDock?.IsPointerOverDockChain != true)
             {
                 RestartCollapseTimer();
             }
@@ -582,11 +1371,539 @@ public partial class MainWindow : Window
 
         DockItems.Remove(item);
 
-        _dockItemStore.DeleteManagedItem(
-            item.Path);
+        DeleteManagedContent(item);
+
+        if (ReferenceEquals(
+                _openSubDock?.Tag,
+                item))
+        {
+            _openSubDock.Close();
+        }
 
         UpdateWindowBounds();
         SaveSettings();
+
+        _openContextMenuCount = 0;
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!_settings.CollapseDisabled &&
+                    _openSubDock?.IsVisible != true &&
+                    !IsMouseOver)
+                {
+                    _collapseTimer.Stop();
+                    RestartCollapseTimer();
+                }
+            },
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void RenameDockItem_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item)
+        {
+            return;
+        }
+
+        SubmenuNameWindow dialog =
+            new(
+                item.DisplayName,
+                "Rename")
+            {
+                Owner = this
+            };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        item.DisplayName =
+            dialog.SubmenuName;
+
+        SaveSettings();
+    }
+
+    private void ChangeDockItemIcon_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            !item.IsSubmenu)
+        {
+            return;
+        }
+
+        string iconSetDirectory =
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "GlueDock_Iconset");
+
+        Directory.CreateDirectory(
+            iconSetDirectory);
+
+        Microsoft.Win32.OpenFileDialog dialog =
+            new()
+            {
+                Title =
+                    "Change icon",
+                Filter =
+                    "Image files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico|PNG|*.png|JPEG|*.jpg;*.jpeg|Bitmap|*.bmp|GIF|*.gif|Icon|*.ico",
+                InitialDirectory =
+                    iconSetDirectory
+            };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            item.SubmenuIconRepositoryPath =
+                IconRepository.Import(
+                    dialog.FileName);
+
+            item.Icon =
+                SubmenuIcon.Create(
+                    _settings,
+                    item.SubmenuIconRepositoryPath);
+
+            SaveSettings();
+        }
+        catch
+        {
+            MessageBox.Show(
+                this,
+                App.Language["Message.SubmenuIconImportFailed"],
+                App.Language["App.Name"],
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void UseDefaultDockItemIcon_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            !item.IsSubmenu)
+        {
+            return;
+        }
+
+        item.SubmenuIconRepositoryPath =
+            string.Empty;
+
+        item.Icon =
+            SubmenuIcon.Create(
+                _settings);
+
+        SaveSettings();
+    }
+
+    private void NewSubmenu_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        SubmenuNameWindow dialog =
+            new()
+            {
+                Owner = this
+            };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        DockItems.Add(
+            new DockItem
+            {
+                IsSubmenu = true,
+                DisplayName = dialog.SubmenuName,
+                Icon = SubmenuIcon.Create(_settings)
+            });
+
+        UpdateWindowBounds();
+        SaveSettings();
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                UpdateItemLabelVisibility();
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private void OpenSubDock_ExternalDragEnded(
+        object? sender,
+        EventArgs e)
+    {
+        StopExternalDragLeaveTimer();
+
+        if (_isExternalDragActive)
+        {
+            _isExternalDragActive = false;
+
+            DebugLog.Write(
+                "RootDrag",
+                "External drag ended in submenu chain.");
+        }
+
+        _collapseTimer.Stop();
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (_settings.CollapseDisabled ||
+                    _isWindowDragging ||
+                    _isExternalDragActive ||
+                    _activeInternalDragItem is not null ||
+                    _openContextMenuCount > 0 ||
+                    IsMouseOver ||
+                    _openSubDock?.IsPointerOverDockChain == true)
+                {
+                    _collapseTimer.Stop();
+                    return;
+                }
+
+                RestartCollapseTimer();
+            },
+            DispatcherPriority.Input);
+    }
+
+    private void OpenSubDock_InteractionStateChanged(
+        object? sender,
+        EventArgs e)
+    {
+        LogRootState(
+            "Subdock interaction state changed");
+
+        if (_pinnedSubmenuItem is null &&
+            _hoverSubmenuItem is not null)
+        {
+            if (_hoverSubmenuAnchor?.IsMouseOver == true ||
+                _openSubDock?.IsPointerOverDockChain == true)
+            {
+                StopSubmenuHoverCloseTimer();
+            }
+            else
+            {
+                StartSubmenuHoverCloseTimer();
+            }
+        }
+
+        if (_settings.CollapseDisabled ||
+            _isWindowDragging ||
+            _isExternalDragActive ||
+            _activeInternalDragItem is not null ||
+            _openContextMenuCount > 0)
+        {
+            _collapseTimer.Stop();
+            return;
+        }
+
+        if (IsMouseOver ||
+            _openSubDock?.IsPointerOverDockChain == true)
+        {
+            _collapseTimer.Stop();
+            return;
+        }
+
+        RestartCollapseTimer();
+    }
+
+    private void OpenSubmenu(
+        DockItem item,
+        FrameworkElement anchor)
+    {
+        if (_isWindowDragging)
+        {
+            return;
+        }
+
+        if (_openSubDock?.IsVisible == true &&
+            ReferenceEquals(
+                _openSubDock.Tag,
+                item))
+        {
+            _collapseTimer.Stop();
+            return;
+        }
+
+        DebugLog.Write(
+            "SubDock",
+            $"Root submenu open; Name={item.DisplayName}; ChildCount={item.Children.Count}");
+
+        _collapseTimer.Stop();
+        _openSubDock?.Close();
+
+        System.Windows.Rect anchorRect;
+
+        DpiScale anchorDpi =
+            VisualTreeHelper.GetDpi(
+                this);
+
+        if (_settings.Edge is
+            DockEdge.Top or
+            DockEdge.Bottom)
+        {
+            anchorRect =
+                new System.Windows.Rect(
+                    Left,
+                    Top,
+                    ActualWidth > 0
+                        ? ActualWidth
+                        : Width,
+                    ActualHeight > 0
+                        ? ActualHeight
+                        : Height);
+        }
+        else
+        {
+            anchorRect =
+                GetScreenRect(
+                    anchor);
+        }
+
+        _openSubDock =
+            new SubDockWindow(
+                item,
+                _settings,
+                _dockItemStore,
+                SaveSettings,
+                MoveItemToSubmenu,
+                CanMoveItemToSubmenu,
+                _settings.Edge)
+            {
+                Tag = item
+            };
+
+        _openSubDock.InteractionStateChanged +=
+            OpenSubDock_InteractionStateChanged;
+
+        _openSubDock.ExternalDragEnded +=
+            OpenSubDock_ExternalDragEnded;
+
+        _openSubDock.Closed +=
+            (_, _) =>
+            {
+                DebugLog.Write(
+                    "SubDock",
+                    $"Root submenu closed; Name={item.DisplayName}");
+
+                if (_openSubDock is not null)
+                {
+                    _openSubDock.InteractionStateChanged -=
+                        OpenSubDock_InteractionStateChanged;
+
+                    _openSubDock.ExternalDragEnded -=
+                        OpenSubDock_ExternalDragEnded;
+                }
+
+                _openSubDock = null;
+
+                if (ReferenceEquals(
+                        _hoverSubmenuItem,
+                        item))
+                {
+                    _hoverSubmenuItem = null;
+                    _hoverSubmenuAnchor = null;
+                }
+
+                if (ReferenceEquals(
+                        _pinnedSubmenuItem,
+                        item))
+                {
+                    _pinnedSubmenuItem = null;
+                }
+
+                StopSubmenuHoverCloseTimer();
+
+                if (!_closingSubDockForRootCollapse &&
+                    !_settings.CollapseDisabled &&
+                    _openContextMenuCount == 0 &&
+                    !IsMouseOver &&
+                    !_collapseTimer.IsEnabled)
+                {
+                    RestartCollapseTimer();
+                }
+            };
+
+        _openSubDock.PositionNextTo(
+            anchorRect,
+            anchorDpi);
+
+        _openSubDock.Show();
+
+        DebugLog.Write(
+            "SubDock",
+            $"Root submenu shown; Name={item.DisplayName}; Left={_openSubDock.Left:0.0}; Top={_openSubDock.Top:0.0}; Width={_openSubDock.Width:0.0}; Height={_openSubDock.Height:0.0}");
+    }
+
+    private bool CanMoveItemToSubmenu(
+        DockItem item,
+        DockItem targetSubmenu)
+    {
+        if (ReferenceEquals(item, targetSubmenu))
+        {
+            return false;
+        }
+
+        if (item.IsSubmenu &&
+            ContainsDockItem(item, targetSubmenu))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void MoveItemToSubmenu(
+        DockItem item,
+        DockItem targetSubmenu)
+    {
+        if (!CanMoveItemToSubmenu(item, targetSubmenu))
+        {
+            return;
+        }
+
+        if (!TryRemoveDockItem(DockItems, item))
+        {
+            return;
+        }
+
+        targetSubmenu.Children.Add(item);
+
+        UpdateWindowBounds();
+        SaveSettings();
+    }
+
+    private static bool TryRemoveDockItem(
+        System.Collections.ObjectModel.ObservableCollection<DockItem> items,
+        DockItem target)
+    {
+        if (items.Remove(target))
+        {
+            return true;
+        }
+
+        foreach (DockItem item in items)
+        {
+            if (item.IsSubmenu &&
+                TryRemoveDockItem(item.Children, target))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsDockItem(
+        DockItem root,
+        DockItem target)
+    {
+        foreach (DockItem child in root.Children)
+        {
+            if (ReferenceEquals(child, target) ||
+                (child.IsSubmenu &&
+                 ContainsDockItem(child, target)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void DeleteManagedContent(
+        DockItem item)
+    {
+        if (item.IsSubmenu)
+        {
+            foreach (DockItem child in item.Children.ToList())
+            {
+                DeleteManagedContent(child);
+            }
+
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.Path))
+        {
+            _dockItemStore.DeleteManagedItem(item.Path);
+        }
+    }
+
+    private static System.Windows.Rect GetScreenRect(
+        FrameworkElement element)
+    {
+        Point topLeftPixels =
+            element.PointToScreen(
+                new Point(0, 0));
+
+        DpiScale dpi =
+            VisualTreeHelper.GetDpi(
+                element);
+
+        Point topLeft =
+            new(
+                topLeftPixels.X /
+                dpi.DpiScaleX,
+                topLeftPixels.Y /
+                dpi.DpiScaleY);
+
+        return new System.Windows.Rect(
+            topLeft.X,
+            topLeft.Y,
+            element.ActualWidth,
+            element.ActualHeight);
+    }
+
+    private void MainWindow_ContextMenuOpening(
+        object sender,
+        ContextMenuEventArgs e)
+    {
+        _openContextMenuCount++;
+
+        LogRootState(
+            "Context menu opening");
+
+        _collapseTimer.Stop();
+
+        if (!_isExpanded)
+        {
+            Expand();
+        }
+    }
+
+    private void MainWindow_ContextMenuClosing(
+        object sender,
+        ContextMenuEventArgs e)
+    {
+        if (_openContextMenuCount > 0)
+        {
+            _openContextMenuCount--;
+        }
+
+        LogRootState(
+            "Context menu closing");
+
+        if (_openContextMenuCount == 0 &&
+            !_settings.CollapseDisabled &&
+            _openSubDock?.IsVisible != true &&
+            !IsMouseOver)
+        {
+            RestartCollapseTimer();
+        }
     }
 
     private void OpenSettings_Click(
@@ -602,7 +1919,10 @@ public partial class MainWindow : Window
         _settingsWindow =
             new SettingsWindow(
                 _settings,
-                ApplySettingsLive)
+                ApplySettingsLive,
+                ApplyItemSpacingLive,
+                ApplySettingsPreview,
+                App.Language)
             {
                 Owner = this
             };
@@ -621,18 +1941,93 @@ public partial class MainWindow : Window
         SaveSettings();
     }
 
+    private void ApplyItemSpacingLive()
+    {
+        DebugLog.Write(
+            "Settings",
+            $"Apply item spacing live; ItemSpacing={_settings.ItemSpacing:0.##}");
+
+        UpdateItemsOrientation();
+        UpdateWindowBounds();
+        UpdateItemLabelVisibility();
+
+        if (_openSubDock?.IsVisible == true)
+        {
+            DpiScale anchorDpi =
+                VisualTreeHelper.GetDpi(
+                    this);
+
+            System.Windows.Rect anchorRect =
+                new(
+                    Left,
+                    Top,
+                    ActualWidth > 0
+                        ? ActualWidth
+                        : Width,
+                    ActualHeight > 0
+                        ? ActualHeight
+                        : Height);
+
+            _openSubDock.ApplyItemSpacingLive(
+                anchorRect,
+                anchorDpi);
+        }
+
+        SaveSettings();
+    }
+
+    private void ApplySettingsPreview()
+    {
+        _isSettingsPreviewApply = true;
+
+        try
+        {
+            ApplySettingsLive();
+        }
+        finally
+        {
+            _isSettingsPreviewApply = false;
+        }
+    }
+
     private void ApplySettingsLive()
     {
+        if (!_isSettingsPreviewApply)
+        {
+            DebugLog.SetEnabled(
+                _settings.DebugLoggingEnabled);
+        }
+
+        DebugLog.Write(
+            "Settings",
+            $"Apply live; Theme={_settings.ThemeName}; CollapseDisabled={_settings.CollapseDisabled}; Delay={_settings.CollapseDelayMilliseconds}; SubdockDelay={_settings.SubdockCollapseDelayMilliseconds}; Labels={_settings.ShowItemLabels}; Previews={_settings.ShowFilePreviews}; SmallShortcutOverlay={_settings.UseSmallShortcutOverlay}; Scale={_settings.DockScale:0.00}; ItemSpacing={_settings.ItemSpacing:0}; Opacity={_settings.Opacity:0.00}; Blur={_settings.BlurRadius:0}; Animation={_settings.AnimationStyle}; Hover={_settings.HoverEffect}");
+
         _collapseTimer.Interval =
             TimeSpan.FromMilliseconds(
                 Math.Max(
                     0,
                     _settings.CollapseDelayMilliseconds));
 
-        StartupManager.SetStartWithWindows(
-            _settings.StartWithWindows);
+        if (_submenuHoverCloseTimer is not null)
+        {
+            _submenuHoverCloseTimer.Interval =
+                TimeSpan.FromMilliseconds(
+                    Math.Max(
+                        0,
+                        _settings.SubdockCollapseDelayMilliseconds));
+        }
 
+        if (!_isSettingsPreviewApply)
+        {
+            StartupManager.SetStartWithWindows(
+                _settings.StartWithWindows);
+        }
+
+        UpdateItemsOrientation();
         ApplyAppearance();
+        UpdateItemLabelVisibility();
+        UpdateDockItemPreviews();
+        RefreshDockItemHoverEffects();
 
         if (_settings.CollapseDisabled)
         {
@@ -644,33 +2039,183 @@ public partial class MainWindow : Window
             RestartCollapseTimer();
         }
 
-        SaveSettings();
+        if (_openSubDock?.IsVisible == true)
+        {
+            _openSubDock.ApplySettingsLive();
+
+            if (_settings.Edge is
+                DockEdge.Top or
+                DockEdge.Bottom)
+            {
+                DpiScale anchorDpi =
+                    VisualTreeHelper.GetDpi(
+                        this);
+
+                System.Windows.Rect anchorRect =
+                    new(
+                        Left,
+                        Top,
+                        ActualWidth > 0
+                            ? ActualWidth
+                            : Width,
+                        ActualHeight > 0
+                            ? ActualHeight
+                            : Height);
+
+                _openSubDock.PositionNextTo(
+                    anchorRect,
+                    anchorDpi);
+            }
+        }
+
+        if (!_isSettingsPreviewApply)
+        {
+            SaveSettings();
+        }
+    }
+
+    private void UpdateDockItemPreviews()
+    {
+        foreach (DockItem item in DockItems)
+        {
+            UpdateDockItemPreview(
+                item);
+        }
+    }
+
+    private void UpdateDockItemPreview(
+        DockItem item)
+    {
+        item.Icon =
+            item.IsSubmenu
+                ? SubmenuIcon.Create(
+                    _settings,
+                    item.SubmenuIconRepositoryPath)
+                : ShellIcon.GetIcon(
+                    item.Path,
+                    _settings.ShowFilePreviews,
+                    _settings.UseSmallShortcutOverlay);
+
+        foreach (DockItem child in item.Children)
+        {
+            UpdateDockItemPreview(
+                child);
+        }
     }
 
     private void ApplyAppearance()
     {
+        DockTheme theme =
+            DockThemeService.Load(
+                _settings.ThemeName);
+
+        bool isMica =
+            string.Equals(
+                _settings.ThemeName,
+                "Mica",
+                StringComparison.OrdinalIgnoreCase);
+
+        double effectiveBlurRadius =
+            isMica
+                ? 0
+                : _settings.BlurRadius;
+
+        if (_initialBackdropReady)
+        {
+            _nativeBackdropHost.SetBlur(
+                effectiveBlurRadius);
+        }
+
         Color expandedColor =
-            Color.FromRgb(
-                0x12,
-                0x16,
-                0x1C);
+            ParseThemeColor(
+                theme.DockBackgroundColor,
+                Color.FromRgb(
+                    0x12,
+                    0x16,
+                    0x1C));
+
+        double effectiveOpacity =
+            isMica
+                ? 0.72 +
+                  (Math.Clamp(
+                      _settings.Opacity,
+                      0,
+                      1) * 0.28)
+                : _settings.Opacity;
 
         byte expandedAlpha =
             (byte)Math.Clamp(
                 Math.Round(
-                    _settings.Opacity * 255),
+                    effectiveOpacity * 255),
                 0,
                 255);
 
+        DebugLog.Write(
+            "Material",
+            $"Root; Theme={_settings.ThemeName}; Mica={isMica}; UserOpacity={_settings.Opacity:0.00}; EffectiveOpacity={effectiveOpacity:0.00}; UserBlur={_settings.BlurRadius:0.##}; EffectiveBlur={effectiveBlurRadius:0.##}");
+
+        Resources["DockItemBackgroundBrush"] =
+            new SolidColorBrush(
+                ParseThemeColor(
+                    theme.ItemBackgroundColor,
+                    Color.FromArgb(
+                        0x22,
+                        0xFF,
+                        0xFF,
+                        0xFF)));
+
+        Resources["DockItemBorderBrush"] =
+            new SolidColorBrush(
+                ParseThemeColor(
+                    theme.ItemBorderColor,
+                    Color.FromArgb(
+                        0x22,
+                        0xFF,
+                        0xFF,
+                        0xFF)));
+
+        Resources["DockTextBrush"] =
+            new SolidColorBrush(
+                ParseThemeColor(
+                    theme.TextColor,
+                    Colors.White));
+
+        Resources["DragGhostBackgroundBrush"] =
+            new SolidColorBrush(
+                ParseThemeColor(
+                    theme.DragGhostBackgroundColor,
+                    Color.FromArgb(
+                        0x22,
+                        0xFF,
+                        0xFF,
+                        0xFF)));
+
+        Resources["DragGhostBorderBrush"] =
+            new SolidColorBrush(
+                ParseThemeColor(
+                    theme.DragGhostBorderColor,
+                    Color.FromArgb(
+                        0x66,
+                        0xFF,
+                        0xFF,
+                        0xFF)));
+
         if (_isExpanded)
         {
+            ApplyGlassSurface(
+                theme,
+                effectiveOpacity,
+                effectiveBlurRadius);
+
             DockChrome.Background =
-                new SolidColorBrush(
-                    Color.FromArgb(
-                        expandedAlpha,
-                        expandedColor.R,
-                        expandedColor.G,
-                        expandedColor.B));
+                theme.GlassSurfaceEnabled
+                    ? Brushes.Transparent
+                    : new SolidColorBrush(
+                        Color.FromArgb(
+                            expandedAlpha,
+                            expandedColor.R,
+                            expandedColor.G,
+                            expandedColor.B));
 
             if (_settings.DockBorderEnabled)
             {
@@ -691,13 +2236,61 @@ public partial class MainWindow : Window
                             0xFF);
                 }
 
-                DockChrome.BorderBrush =
-                    new SolidColorBrush(
-                        Color.FromArgb(
-                            0xFF,
-                            borderColor.R,
-                            borderColor.G,
-                            borderColor.B));
+                if (theme.GlassSurfaceEnabled)
+                {
+                    LinearGradientBrush borderBrush =
+                        new()
+                        {
+                            StartPoint =
+                                new Point(
+                                    0.5,
+                                    0),
+                            EndPoint =
+                                new Point(
+                                    0.5,
+                                    1)
+                        };
+
+                    borderBrush.GradientStops.Add(
+                        new GradientStop(
+                            Color.FromArgb(
+                                0xC8,
+                                borderColor.R,
+                                borderColor.G,
+                                borderColor.B),
+                            0));
+
+                    borderBrush.GradientStops.Add(
+                        new GradientStop(
+                            Color.FromArgb(
+                                0x78,
+                                borderColor.R,
+                                borderColor.G,
+                                borderColor.B),
+                            0.55));
+
+                    borderBrush.GradientStops.Add(
+                        new GradientStop(
+                            Color.FromArgb(
+                                0x28,
+                                borderColor.R,
+                                borderColor.G,
+                                borderColor.B),
+                            1));
+
+                    DockChrome.BorderBrush =
+                        borderBrush;
+                }
+                else
+                {
+                    DockChrome.BorderBrush =
+                        new SolidColorBrush(
+                            Color.FromArgb(
+                                0xFF,
+                                borderColor.R,
+                                borderColor.G,
+                                borderColor.B));
+                }
 
                 DockChrome.BorderThickness =
                     new Thickness(1);
@@ -713,6 +2306,8 @@ public partial class MainWindow : Window
         }
         else
         {
+            ResetGlassSurface();
+
             Color collapsedColor;
 
             try
@@ -749,6 +2344,223 @@ public partial class MainWindow : Window
         UpdateWindowBounds();
     }
 
+    private void ApplyGlassSurface(
+        DockTheme theme,
+        double opacity,
+        double blurRadius)
+    {
+        if (!theme.GlassSurfaceEnabled)
+        {
+            ResetGlassSurface();
+            return;
+        }
+
+        double cornerRadius =
+            Math.Clamp(
+                theme.GlassCornerRadius,
+                0,
+                80);
+
+        DockChrome.CornerRadius =
+            new CornerRadius(
+                cornerRadius);
+
+        DockGlassSurface.CornerRadius =
+            new CornerRadius(
+                cornerRadius);
+
+        DockGlassHighlight.CornerRadius =
+            new CornerRadius(
+                cornerRadius);
+
+        Color topColor =
+            ParseThemeColor(
+                theme.GlassTopColor,
+                Color.FromArgb(
+                    0xD0,
+                    0xE8,
+                    0xF2,
+                    0xEC));
+
+        Color bottomColor =
+            ParseThemeColor(
+                theme.GlassBottomColor,
+                Color.FromArgb(
+                    0x80,
+                    0xA8,
+                    0xBE,
+                    0xB4));
+
+        LinearGradientBrush surfaceBrush =
+            new(
+                topColor,
+                bottomColor,
+                new Point(
+                    0.5,
+                    0),
+                new Point(
+                    0.5,
+                    1))
+            {
+                Opacity =
+                    Math.Clamp(
+                        opacity,
+                        0.10,
+                        1.0)
+            };
+
+        Color highlightColor =
+            ParseThemeColor(
+                theme.GlassHighlightColor,
+                Color.FromArgb(
+                    0xB0,
+                    0xFF,
+                    0xFF,
+                    0xFF));
+
+        LinearGradientBrush highlightBrush =
+            new()
+            {
+                StartPoint =
+                    new Point(
+                        0.5,
+                        0),
+                EndPoint =
+                    new Point(
+                        0.5,
+                        1)
+            };
+
+        highlightBrush.GradientStops.Add(
+            new GradientStop(
+                highlightColor,
+                0));
+
+        highlightBrush.GradientStops.Add(
+            new GradientStop(
+                Color.FromArgb(
+                    0,
+                    highlightColor.R,
+                    highlightColor.G,
+                    highlightColor.B),
+                0.55));
+
+        Color shadowColor =
+            ParseThemeColor(
+                theme.GlassShadowColor,
+                Color.FromRgb(
+                    0x0B,
+                    0x17,
+                    0x20));
+
+        DockGlassSurface.Background =
+            surfaceBrush;
+
+        DockGlassSurface.Effect =
+            null;
+
+        DockGlassSurface.Visibility =
+            Visibility.Visible;
+
+        LinearGradientBrush frameBrush =
+            new()
+            {
+                StartPoint =
+                    new Point(
+                        0.5,
+                        0),
+                EndPoint =
+                    new Point(
+                        0.5,
+                        1)
+            };
+
+        frameBrush.GradientStops.Add(
+            new GradientStop(
+                highlightColor,
+                0));
+
+        frameBrush.GradientStops.Add(
+            new GradientStop(
+                Color.FromArgb(
+                    (byte)(highlightColor.A * 0.35),
+                    highlightColor.R,
+                    highlightColor.G,
+                    highlightColor.B),
+                0.55));
+
+        frameBrush.GradientStops.Add(
+            new GradientStop(
+                Color.FromArgb(
+                    0,
+                    highlightColor.R,
+                    highlightColor.G,
+                    highlightColor.B),
+                1));
+
+        DockGlassHighlight.Background =
+            highlightBrush;
+
+        DockGlassHighlight.BorderBrush =
+            frameBrush;
+
+        DockGlassHighlight.BorderThickness =
+            new Thickness(
+                1);
+
+        DockGlassHighlight.Visibility =
+            Visibility.Visible;
+
+        DebugLog.Write(
+            "AeroRender",
+            $"Root; GlassSurfaceEnabled={theme.GlassSurfaceEnabled}; GlassTopColor={theme.GlassTopColor}; GlassBottomColor={theme.GlassBottomColor}; GlassHighlightColor={theme.GlassHighlightColor}; GlassCornerRadius={cornerRadius:0.##}; SurfaceOpacity={surfaceBrush.Opacity:0.##}; HighlightVisibility={DockGlassHighlight.Visibility}; BorderThickness={DockGlassHighlight.BorderThickness}; FrameStops={frameBrush.GradientStops.Count}; FrameStop0={frameBrush.GradientStops[0].Color}; FrameStop1={frameBrush.GradientStops[1].Color}; FrameStop2={frameBrush.GradientStops[2].Color}");
+    }
+
+    private void ResetGlassSurface()
+    {
+        DockChrome.CornerRadius =
+            new CornerRadius(
+                20);
+
+        DockGlassSurface.Background =
+            Brushes.Transparent;
+
+        DockGlassSurface.Effect =
+            null;
+
+        DockGlassSurface.Visibility =
+            Visibility.Collapsed;
+
+        DockGlassHighlight.Background =
+            Brushes.Transparent;
+
+        DockGlassHighlight.BorderBrush =
+            Brushes.Transparent;
+
+        DockGlassHighlight.BorderThickness =
+            new Thickness(
+                0);
+
+        DockGlassHighlight.Visibility =
+            Visibility.Collapsed;
+    }
+
+    private static Color ParseThemeColor(
+        string value,
+        Color fallback)
+    {
+        try
+        {
+            return
+                (Color)ColorConverter.ConvertFromString(
+                    value);
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
     private void ApplyDockScale()
     {
         double scale =
@@ -763,11 +2575,75 @@ public partial class MainWindow : Window
                 scale);
     }
 
+    private void About_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (_aboutWindow is not null)
+        {
+            _aboutWindow.Activate();
+            return;
+        }
+
+        _updateCheckTask ??=
+            GitHubUpdateService.CheckForUpdateAsync();
+
+        _aboutWindow =
+            new AboutWindow(
+                _updateCheckTask)
+            {
+                Owner = this
+            };
+
+        _aboutWindow.Closed +=
+            (_, _) =>
+            {
+                _aboutWindow = null;
+            };
+
+        _aboutWindow.Show();
+    }
+
     private void Exit_Click(
         object sender,
         RoutedEventArgs e)
     {
         Application.Current.Shutdown();
+    }
+
+    private void AddDroppedItemsToSubmenu(
+        IEnumerable<string> paths,
+        DockItem submenu)
+    {
+        foreach (string path in paths)
+        {
+            if (!File.Exists(path) &&
+                !Directory.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                string managedPath =
+                    _dockItemStore.Import(
+                        path);
+
+                submenu.Children.Add(
+                    CreateDockItem(
+                        managedPath));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"{App.Language["Message.ImportFailed"]}\n\n{path}\n\n{ex.Message}",
+                    App.Language["App.Name"],
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        SaveSettings();
     }
 
     private void AddDroppedItems(
@@ -793,14 +2669,349 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"Das Objekt konnte nicht in GlueDock gespeichert werden.\n\n{path}\n\n{ex.Message}",
-                    "GlueDock",
+                    $"{App.Language["Message.ImportFailed"]}\n\n{path}\n\n{ex.Message}",
+                    App.Language["App.Name"],
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
         }
 
         UpdateWindowBounds();
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                UpdateItemLabelVisibility();
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private void ShowInternalDragGhost(
+        DockItem draggedItem)
+    {
+        DragGhostImage.Source =
+            draggedItem.Icon;
+
+        DragGhostLabel.Text =
+            draggedItem.DisplayName;
+
+        DragGhostLabel.Visibility =
+            _settings.ShowItemLabels
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+        DragGhost.Visibility =
+            Visibility.Visible;
+    }
+
+    private void HideInternalDragGhost()
+    {
+        DragGhost.Visibility =
+            Visibility.Collapsed;
+
+        DragGhost.RenderTransform =
+            Transform.Identity;
+
+        DragGhostImage.Source = null;
+        DragGhostLabel.Text = string.Empty;
+    }
+
+    private FrameworkElement? FindSubmenuElementAtPosition(
+        Point pointerPosition)
+    {
+        HitTestResult? hit =
+            VisualTreeHelper.HitTest(
+                DockItemsControl,
+                pointerPosition);
+
+        DependencyObject? current =
+            hit?.VisualHit;
+
+        while (current is not null &&
+               !ReferenceEquals(
+                   current,
+                   DockItemsControl))
+        {
+            if (current is FrameworkElement element &&
+                element.DataContext is DockItem item &&
+                item.IsSubmenu)
+            {
+                return element;
+            }
+
+            current =
+                VisualTreeHelper.GetParent(
+                    current);
+        }
+
+        return null;
+    }
+
+    private void UpdateInternalDragVisual(
+        Point pointerPosition)
+    {
+        if (DragGhost.Visibility !=
+            Visibility.Visible)
+        {
+            return;
+        }
+
+        Point pointerInGrid =
+            DockItemsControl.TranslatePoint(
+                pointerPosition,
+                DockContentGrid);
+
+        double targetX =
+            pointerInGrid.X -
+            _dragPointerOffset.X;
+
+        double targetY =
+            pointerInGrid.Y -
+            _dragPointerOffset.Y;
+
+        DragGhost.RenderTransform =
+            new TranslateTransform(
+                targetX,
+                targetY);
+    }
+
+    private void UpdateInternalDragPosition(
+        DockItem draggedItem,
+        Point pointerPosition)
+    {
+        int currentIndex =
+            DockItems.IndexOf(
+                draggedItem);
+
+        if (currentIndex < 0 ||
+            DockItems.Count <= 1)
+        {
+            return;
+        }
+
+        bool vertical =
+            _settings.Edge is
+                DockEdge.Left or
+                DockEdge.Right;
+
+        double axisLength =
+            vertical
+                ? DockItemsControl.ActualHeight
+                : DockItemsControl.ActualWidth;
+
+        if (axisLength <= 0)
+        {
+            return;
+        }
+
+        double pointerAxis =
+            vertical
+                ? pointerPosition.Y
+                : pointerPosition.X;
+
+        double slotLength =
+            axisLength /
+            DockItems.Count;
+
+        if (slotLength <= 0)
+        {
+            return;
+        }
+
+        int targetIndex =
+            Math.Clamp(
+                (int)Math.Floor(
+                    pointerAxis /
+                    slotLength),
+                0,
+                DockItems.Count - 1);
+
+        if (targetIndex ==
+            _lastInternalDragIndex)
+        {
+            return;
+        }
+
+        double targetSlotStart =
+            targetIndex *
+            slotLength;
+
+        double targetSlotCenter =
+            targetSlotStart +
+            (slotLength / 2);
+
+        const double hysteresis = 6;
+
+        if (targetIndex > currentIndex &&
+            pointerAxis <
+            targetSlotCenter + hysteresis)
+        {
+            return;
+        }
+
+        if (targetIndex < currentIndex &&
+            pointerAxis >
+            targetSlotCenter - hysteresis)
+        {
+            return;
+        }
+
+        AnimateInternalDragMove(
+            draggedItem,
+            currentIndex,
+            targetIndex);
+
+        _lastInternalDragIndex =
+            targetIndex;
+    }
+
+    private void AnimateInternalDragMove(
+        DockItem draggedItem,
+        int currentIndex,
+        int targetIndex)
+    {
+        Dictionary<DockItem, Point> oldPositions =
+            [];
+
+        for (int index = 0;
+             index < DockItems.Count;
+             index++)
+        {
+            DockItem item =
+                DockItems[index];
+
+            if (DockItemsControl.ItemContainerGenerator.ContainerFromItem(
+                    item) is not FrameworkElement container)
+            {
+                continue;
+            }
+
+            oldPositions[item] =
+                container.TranslatePoint(
+                    new Point(0, 0),
+                    DockItemsControl);
+        }
+
+        ResetInternalDragItemTransforms();
+
+        DockItems.Move(
+            currentIndex,
+            targetIndex);
+
+        DockItemsControl.UpdateLayout();
+
+        Duration duration =
+            new(
+                TimeSpan.FromMilliseconds(
+                    150));
+
+        CubicEase easing =
+            new()
+            {
+                EasingMode =
+                    EasingMode.EaseOut
+            };
+
+        for (int index = 0;
+             index < DockItems.Count;
+             index++)
+        {
+            DockItem item =
+                DockItems[index];
+
+            if (!oldPositions.TryGetValue(
+                    item,
+                    out Point oldPosition) ||
+                DockItemsControl.ItemContainerGenerator.ContainerFromItem(
+                    item) is not FrameworkElement container)
+            {
+                continue;
+            }
+
+            Point newPosition =
+                container.TranslatePoint(
+                    new Point(0, 0),
+                    DockItemsControl);
+
+            double offsetX =
+                oldPosition.X -
+                newPosition.X;
+
+            double offsetY =
+                oldPosition.Y -
+                newPosition.Y;
+
+            if (Math.Abs(offsetX) < 0.1 &&
+                Math.Abs(offsetY) < 0.1)
+            {
+                continue;
+            }
+
+            TranslateTransform transform =
+                new();
+
+            container.RenderTransform =
+                transform;
+
+            transform.BeginAnimation(
+                TranslateTransform.XProperty,
+                new DoubleAnimation(
+                    offsetX,
+                    0,
+                    duration)
+                {
+                    EasingFunction =
+                        easing
+                });
+
+            transform.BeginAnimation(
+                TranslateTransform.YProperty,
+                new DoubleAnimation(
+                    offsetY,
+                    0,
+                    duration)
+                {
+                    EasingFunction =
+                        easing
+                });
+        }
+
+        SetInternalDragItemVisibility(
+            draggedItem,
+            visible: false);
+    }
+
+    private void SetInternalDragItemVisibility(
+        DockItem item,
+        bool visible)
+    {
+        if (DockItemsControl.ItemContainerGenerator.ContainerFromItem(
+                item) is not FrameworkElement container)
+        {
+            return;
+        }
+
+        container.Opacity =
+            visible
+                ? 1
+                : 0;
+    }
+
+    private void ResetInternalDragItemTransforms()
+    {
+        for (int index = 0;
+             index < DockItemsControl.Items.Count;
+             index++)
+        {
+            if (DockItemsControl.ItemContainerGenerator.ContainerFromIndex(
+                    index) is not FrameworkElement container)
+            {
+                continue;
+            }
+
+            container.RenderTransform =
+                Transform.Identity;
+        }
     }
 
     private void ReorderDockItem(
@@ -891,7 +3102,7 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private static DockItem CreateDockItem(
+    private DockItem CreateDockItem(
         string path)
     {
         string trimmedPath =
@@ -901,23 +3112,75 @@ public partial class MainWindow : Window
 
         string displayName =
             Directory.Exists(path)
-                ? Path.GetFileName(
-                    trimmedPath)
-                : Path.GetFileNameWithoutExtension(
-                    path);
+                ? Path.GetFileName(trimmedPath)
+                : Path.GetFileNameWithoutExtension(path);
 
-        if (string.IsNullOrWhiteSpace(
-                displayName))
+        if (string.IsNullOrWhiteSpace(displayName))
         {
-            displayName =
-                Path.GetFileName(path);
+            displayName = Path.GetFileName(path);
         }
 
         return new DockItem
         {
             Path = path,
             DisplayName = displayName,
-            Icon = ShellIcon.GetIcon(path)
+            Icon =
+                ShellIcon.GetIcon(
+                    path,
+                    _settings.ShowFilePreviews,
+                    _settings.UseSmallShortcutOverlay)
+        };
+    }
+
+    private DockItem CreateDockItem(
+        DockEntrySettings entry)
+    {
+        DockItem item =
+            new()
+            {
+                Id =
+                    string.IsNullOrWhiteSpace(entry.Id)
+                        ? Guid.NewGuid().ToString("N")
+                        : entry.Id,
+                Path = entry.Path ?? string.Empty,
+                DisplayName = entry.DisplayName ?? string.Empty,
+                IsSubmenu = entry.IsSubmenu,
+                SubmenuIconRepositoryPath =
+                    entry.SubmenuIconRepositoryPath ?? string.Empty,
+                Icon =
+                    entry.IsSubmenu
+                        ? SubmenuIcon.Create(
+                            _settings,
+                            entry.SubmenuIconRepositoryPath ?? string.Empty)
+                        : ShellIcon.GetIcon(
+                            entry.Path ?? string.Empty,
+                            _settings.ShowFilePreviews,
+                            _settings.UseSmallShortcutOverlay)
+            };
+
+        foreach (DockEntrySettings child in entry.Children ?? [])
+        {
+            item.Children.Add(CreateDockItem(child));
+        }
+
+        return item;
+    }
+
+    private static DockEntrySettings CreateSettingsEntry(
+        DockItem item)
+    {
+        return new DockEntrySettings
+        {
+            Id = item.Id,
+            Path = item.Path,
+            DisplayName = item.DisplayName,
+            IsSubmenu = item.IsSubmenu,
+            SubmenuIconRepositoryPath =
+                item.SubmenuIconRepositoryPath,
+            Children =
+                item.Children
+                    .Select(CreateSettingsEntry)
+                    .ToList()
         };
     }
 
@@ -951,8 +3214,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(
-                $"Das Objekt konnte nicht gestartet werden.\n\n{item.Path}\n\n{ex.Message}",
-                "GlueDock",
+                $"{App.Language["Message.LaunchFailed"]}\n\n{item.Path}\n\n{ex.Message}",
+                App.Language["App.Name"],
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -960,6 +3223,9 @@ public partial class MainWindow : Window
 
     private void Expand()
     {
+        LogRootState(
+            "Expand requested");
+
         if (_isExpanded &&
             !_collapseAnimationRunning)
         {
@@ -976,6 +3242,9 @@ public partial class MainWindow : Window
         DockChrome.RenderTransform = Transform.Identity;
 
         _isExpanded = true;
+
+        DockContentGrid.Visibility =
+            Visibility.Visible;
 
         DockChrome.Padding =
             new Thickness(
@@ -998,6 +3267,9 @@ public partial class MainWindow : Window
     private void Collapse(
         bool immediate)
     {
+        LogRootState(
+            $"Collapse requested; Immediate={immediate}");
+
         if (_settings.CollapseDisabled)
         {
             Expand();
@@ -1028,12 +3300,18 @@ public partial class MainWindow : Window
         _collapseAnimationRunning = false;
         _isExpanded = false;
 
+        LogRootState(
+            "Complete collapse");
+
         DockChrome.BeginAnimation(
             OpacityProperty,
             null);
 
         DockChrome.Opacity = 1;
         DockChrome.RenderTransform = Transform.Identity;
+
+        DockContentGrid.Visibility =
+            Visibility.Collapsed;
 
         DockChrome.Padding =
             new Thickness(0);
@@ -1082,6 +3360,12 @@ public partial class MainWindow : Window
                 TranslateTransform transform =
                     new();
 
+                DockChrome.CacheMode =
+                    new BitmapCache
+                    {
+                        SnapsToDevicePixels = true
+                    };
+
                 DockChrome.RenderTransform =
                     transform;
 
@@ -1098,7 +3382,9 @@ public partial class MainWindow : Window
                     new(
                         offset,
                         0,
-                        new Duration(duration))
+                        new Duration(
+                            TimeSpan.FromMilliseconds(
+                                220)))
                     {
                         FillBehavior =
                             FillBehavior.Stop,
@@ -1106,7 +3392,7 @@ public partial class MainWindow : Window
                             new CubicEase
                             {
                                 EasingMode =
-                                    EasingMode.EaseOut
+                                    EasingMode.EaseInOut
                             }
                     };
 
@@ -1115,6 +3401,9 @@ public partial class MainWindow : Window
                     {
                         DockChrome.RenderTransform =
                             Transform.Identity;
+
+                        DockChrome.CacheMode =
+                            null;
                     };
 
                 if (_settings.Edge is DockEdge.Left or DockEdge.Right)
@@ -1257,6 +3546,12 @@ public partial class MainWindow : Window
                 TranslateTransform transform =
                     new();
 
+                DockChrome.CacheMode =
+                    new BitmapCache
+                    {
+                        SnapsToDevicePixels = true
+                    };
+
                 DockChrome.RenderTransform =
                     transform;
 
@@ -1273,15 +3568,17 @@ public partial class MainWindow : Window
                     new(
                         0,
                         offset,
-                        new Duration(duration))
+                        new Duration(
+                            TimeSpan.FromMilliseconds(
+                                200)))
                     {
                         FillBehavior =
                             FillBehavior.Stop,
                         EasingFunction =
-                            new QuadraticEase
+                            new CubicEase
                             {
                                 EasingMode =
-                                    EasingMode.EaseIn
+                                    EasingMode.EaseInOut
                             }
                     };
 
@@ -1290,6 +3587,9 @@ public partial class MainWindow : Window
                     {
                         DockChrome.RenderTransform =
                             Transform.Identity;
+
+                        DockChrome.CacheMode =
+                            null;
 
                         CompleteCollapse();
                     };
@@ -1413,6 +3713,143 @@ public partial class MainWindow : Window
         }
     }
 
+    private void UpdateItemLabelVisibility()
+    {
+        DebugLog.Write(
+            "Labels",
+            $"Update root labels; Enabled={_settings.ShowItemLabels}; Items={DockItemsControl.Items.Count}");
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                DockItemsControl.UpdateLayout();
+
+                foreach (object item in DockItemsControl.Items)
+                {
+                    if (DockItemsControl.ItemContainerGenerator.ContainerFromItem(item)
+                        is not FrameworkElement container)
+                    {
+                        continue;
+                    }
+
+                    TextBlock? label =
+                        FindVisualChild<TextBlock>(
+                            container,
+                            "DockItemLabel");
+
+                    if (label is null)
+                    {
+                        continue;
+                    }
+
+                    label.Visibility =
+                        _settings.ShowItemLabels
+                            ? Visibility.Visible
+                            : Visibility.Collapsed;
+
+                    if (_settings.ShowItemLabels)
+                    {
+                        double pixelsPerDip =
+                            VisualTreeHelper.GetDpi(label).PixelsPerDip;
+
+                        FormattedText formattedText =
+                            new(
+                                label.Text ?? string.Empty,
+                                System.Globalization.CultureInfo.CurrentUICulture,
+                                label.FlowDirection,
+                                new Typeface(
+                                    label.FontFamily,
+                                    label.FontStyle,
+                                    label.FontWeight,
+                                    label.FontStretch),
+                                label.FontSize,
+                                label.Foreground,
+                                pixelsPerDip);
+
+                        double availableWidth =
+                            Math.Max(
+                                0,
+                                container.ActualWidth -
+                                label.Margin.Left -
+                                label.Margin.Right);
+
+                        bool centerText =
+                            formattedText.WidthIncludingTrailingWhitespace <=
+                            availableWidth;
+
+                        label.TextAlignment =
+                            centerText
+                                ? TextAlignment.Center
+                                : TextAlignment.Left;
+
+                        try
+                        {
+                            Point itemPosition =
+                                container.TranslatePoint(
+                                    new Point(0, 0),
+                                    DockItemsControl);
+
+                            Point labelPosition =
+                                label.TranslatePoint(
+                                    new Point(0, 0),
+                                    DockItemsControl);
+
+                            DebugLog.Write(
+                                "ItemLayout",
+                                $"Root; Item={item}; Spacing={_settings.ItemSpacing:0.##}; ContainerX={itemPosition.X:0.##}; ContainerY={itemPosition.Y:0.##}; ContainerActualWidth={container.ActualWidth:0.##}; ContainerActualHeight={container.ActualHeight:0.##}; LabelX={labelPosition.X:0.##}; LabelY={labelPosition.Y:0.##}; LabelActualWidth={label.ActualWidth:0.##}; LabelActualHeight={label.ActualHeight:0.##}; NaturalTextWidth={formattedText.WidthIncludingTrailingWhitespace:0.##}; AvailableTextWidth={availableWidth:0.##}; TextAlignment={label.TextAlignment}");
+                        }
+                        catch (Exception exception)
+                        {
+                            DebugLog.WriteException(
+                                "ItemLayout",
+                                exception);
+                        }
+                    }
+                }
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private static T? FindVisualChild<T>(
+        DependencyObject parent,
+        string name)
+        where T : FrameworkElement
+    {
+        int childCount =
+            VisualTreeHelper.GetChildrenCount(parent);
+
+        for (int index = 0;
+             index < childCount;
+             index++)
+        {
+            DependencyObject child =
+                VisualTreeHelper.GetChild(
+                    parent,
+                    index);
+
+            if (child is T element &&
+                string.Equals(
+                    element.Name,
+                    name,
+                    StringComparison.Ordinal))
+            {
+                return element;
+            }
+
+            T? nested =
+                FindVisualChild<T>(
+                    child,
+                    name);
+
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
     private void UpdateItemsOrientation()
     {
         Orientation orientation =
@@ -1421,6 +3858,41 @@ public partial class MainWindow : Window
                 DockEdge.Right
                 ? Orientation.Vertical
                 : Orientation.Horizontal;
+
+        double itemSpacing =
+            Math.Clamp(
+                _settings.ItemSpacing,
+                -8,
+                42);
+
+        double itemWidth =
+            58 +
+            itemSpacing;
+
+        Resources["DockItemWidth"] =
+            itemWidth;
+
+        Resources["DockItemMargin"] =
+            orientation == Orientation.Horizontal
+                ? new Thickness(
+                    0,
+                    3,
+                    0,
+                    3)
+                : new Thickness(
+                    3,
+                    itemSpacing / 2.0,
+                    3,
+                    itemSpacing / 2.0);
+
+        DebugLog.Write(
+            "ItemLayout",
+            $"Root layout update; Edge={_settings.Edge}; Spacing={_settings.ItemSpacing:0.##}; EffectiveSpacing={itemSpacing:0.##}; ItemWidth={itemWidth:0.##}; Orientation={orientation}; ItemsPanelChanged={_itemsOrientation != orientation}");
+
+        if (_itemsOrientation == orientation)
+        {
+            return;
+        }
 
         FrameworkElementFactory stackPanelFactory =
             new(
@@ -1433,6 +3905,9 @@ public partial class MainWindow : Window
         DockItemsControl.ItemsPanel =
             new ItemsPanelTemplate(
                 stackPanelFactory);
+
+        _itemsOrientation =
+            orientation;
     }
 
     private void UpdateWindowBounds()
@@ -1445,18 +3920,38 @@ public partial class MainWindow : Window
         MonitorInfo monitor =
             GetCurrentMonitorInfo();
 
+        DpiScale dpi =
+            VisualTreeHelper.GetDpi(
+                this);
+
+        double workLeft =
+            monitor.rcWork.Left /
+            dpi.DpiScaleX;
+
+        double workTop =
+            monitor.rcWork.Top /
+            dpi.DpiScaleY;
+
+        double workRight =
+            monitor.rcWork.Right /
+            dpi.DpiScaleX;
+
+        double workBottom =
+            monitor.rcWork.Bottom /
+            dpi.DpiScaleY;
+
         bool vertical =
             _settings.Edge is
                 DockEdge.Left or
                 DockEdge.Right;
 
-        double monitorWidth =
-            monitor.rcMonitor.Right -
-            monitor.rcMonitor.Left;
+        double workAreaWidth =
+            workRight -
+            workLeft;
 
-        double monitorHeight =
-            monitor.rcMonitor.Bottom -
-            monitor.rcMonitor.Top;
+        double workAreaHeight =
+            workBottom -
+            workTop;
 
         double scale =
             Math.Clamp(
@@ -1464,25 +3959,48 @@ public partial class MainWindow : Window
                 0.60,
                 2.00);
 
+        double itemSpacing =
+            Math.Clamp(
+                _settings.ItemSpacing,
+                -8,
+                42);
+
+        double itemSlotLength =
+            58 +
+            itemSpacing;
+
         double length =
             Math.Max(
                 MinimumLength * scale,
                 (DockItems.Count *
-                 ItemSlotLength * scale) +
+                 itemSlotLength * scale) +
                 (DockPaddingLength * scale));
 
         length =
             vertical
                 ? Math.Min(
                     length,
-                    monitorHeight * 0.82)
+                    workAreaHeight * 0.82)
                 : Math.Min(
                     length,
-                    monitorWidth * 0.82);
+                    workAreaWidth * 0.82);
+
+        double thicknessScale =
+            Math.Clamp(
+                _settings.DockThicknessScale,
+                0.50,
+                1.00);
+
+        double expandedThickness =
+            (ItemSlotLength * scale) +
+            ((BaseExpandedThickness -
+              ItemSlotLength) *
+             scale *
+             thicknessScale);
 
         double thickness =
             _isExpanded
-                ? BaseExpandedThickness * scale
+                ? expandedThickness
                 : Math.Clamp(
                     _settings.BarThickness,
                     2,
@@ -1502,10 +4020,10 @@ public partial class MainWindow : Window
             vertical
                 ? Math.Max(
                     0,
-                    monitorHeight - height)
+                    workAreaHeight - height)
                 : Math.Max(
                     0,
-                    monitorWidth - width);
+                    workAreaWidth - width);
 
         double ratio =
             Math.Clamp(
@@ -1519,38 +4037,38 @@ public partial class MainWindow : Window
         switch (_settings.Edge)
         {
             case DockEdge.Left:
-                left = monitor.rcMonitor.Left;
+                left = workLeft;
                 top =
-                    monitor.rcMonitor.Top +
+                    workTop +
                     (availableTravel * ratio);
                 break;
 
             case DockEdge.Right:
                 left =
-                    monitor.rcMonitor.Right -
+                    workRight -
                     width;
 
                 top =
-                    monitor.rcMonitor.Top +
+                    workTop +
                     (availableTravel * ratio);
                 break;
 
             case DockEdge.Top:
                 left =
-                    monitor.rcMonitor.Left +
+                    workLeft +
                     (availableTravel * ratio);
 
                 top =
-                    monitor.rcMonitor.Top;
+                    workTop;
                 break;
 
             default:
                 left =
-                    monitor.rcMonitor.Left +
+                    workLeft +
                     (availableTravel * ratio);
 
                 top =
-                    monitor.rcMonitor.Bottom -
+                    workBottom -
                     height;
                 break;
         }
@@ -1559,6 +4077,12 @@ public partial class MainWindow : Window
         Top = top;
         Width = width;
         Height = height;
+
+        EnsureDockTopmost();
+
+        DebugLog.Write(
+            "RootBounds",
+            $"Updated; Edge={_settings.Edge}; Expanded={_isExpanded}; Left={Left:0.0}; Top={Top:0.0}; Width={Width:0.0}; Height={Height:0.0}; Ratio={_settings.EdgePositionRatio:0.000}; DpiX={dpi.DpiScaleX:0.00}; DpiY={dpi.DpiScaleY:0.00}; WorkPixelLeft={monitor.rcWork.Left}; WorkPixelTop={monitor.rcWork.Top}; WorkPixelRight={monitor.rcWork.Right}; WorkPixelBottom={monitor.rcWork.Bottom}; WorkDipLeft={workLeft:0.0}; WorkDipTop={workTop:0.0}; WorkDipRight={workRight:0.0}; WorkDipBottom={workBottom:0.0}");
     }
 
     private void SnapToNearestEdge()
@@ -1566,25 +4090,45 @@ public partial class MainWindow : Window
         MonitorInfo monitor =
             GetCurrentMonitorInfo();
 
+        DpiScale dpi =
+            VisualTreeHelper.GetDpi(
+                this);
+
+        double workLeft =
+            monitor.rcWork.Left /
+            dpi.DpiScaleX;
+
+        double workTop =
+            monitor.rcWork.Top /
+            dpi.DpiScaleY;
+
+        double workRight =
+            monitor.rcWork.Right /
+            dpi.DpiScaleX;
+
+        double workBottom =
+            monitor.rcWork.Bottom /
+            dpi.DpiScaleY;
+
         double leftDistance =
             Math.Abs(
                 Left -
-                monitor.rcMonitor.Left);
+                workLeft);
 
         double rightDistance =
             Math.Abs(
                 (Left + ActualWidth) -
-                monitor.rcMonitor.Right);
+                workRight);
 
         double topDistance =
             Math.Abs(
                 Top -
-                monitor.rcMonitor.Top);
+                workTop);
 
         double bottomDistance =
             Math.Abs(
                 (Top + ActualHeight) -
-                monitor.rcMonitor.Bottom);
+                workBottom);
 
         double minimum =
             Math.Min(
@@ -1611,12 +4155,12 @@ public partial class MainWindow : Window
                 DockEdge.Left or
                 DockEdge.Right;
 
-        double monitorLength =
+        double workAreaLength =
             vertical
-                ? monitor.rcMonitor.Bottom -
-                  monitor.rcMonitor.Top
-                : monitor.rcMonitor.Right -
-                  monitor.rcMonitor.Left;
+                ? workBottom -
+                  workTop
+                : workRight -
+                  workLeft;
 
         double dockLength =
             vertical
@@ -1626,12 +4170,12 @@ public partial class MainWindow : Window
         double availableTravel =
             Math.Max(
                 0,
-                monitorLength - dockLength);
+                workAreaLength - dockLength);
 
         double axisPosition =
             vertical
-                ? Top - monitor.rcMonitor.Top
-                : Left - monitor.rcMonitor.Left;
+                ? Top - workTop
+                : Left - workLeft;
 
         _settings.EdgePositionRatio =
             availableTravel <= 0
@@ -1667,16 +4211,24 @@ public partial class MainWindow : Window
         return monitorInfo;
     }
 
+    private void LogRootState(
+        string eventName)
+    {
+        DebugLog.Write(
+            "RootState",
+            $"{eventName}; Edge={_settings.Edge}; Expanded={_isExpanded}; MouseOver={IsMouseOver}; WindowDragging={_isWindowDragging}; ExternalDrag={_isExternalDragActive}; CollapseAnimation={_collapseAnimationRunning}; CollapseTimer={_collapseTimer.IsEnabled}; ZoomUnlock={_zoomHoverUnlockTimer.IsEnabled}; ContextMenus={_openContextMenuCount}; SubDockOpen={_openSubDock?.IsVisible == true}; SubDockActive={_openSubDock?.IsPointerOverDockChain == true}; ClosingSubDockForCollapse={_closingSubDockForRootCollapse}; Left={Left:0.0}; Top={Top:0.0}; Width={Width:0.0}; Height={Height:0.0}; Labels={_settings.ShowItemLabels}");
+    }
+
     private void SaveSettings()
     {
-        _settings.Items =
+        _settings.DockItems =
             DockItems
-                .Select(
-                    item => item.Path)
+                .Select(CreateSettingsEntry)
                 .ToList();
 
-        _settingsStore.Save(
-            _settings);
+        _settings.Items = [];
+
+        _settingsStore.Save(_settings);
     }
 
     private void ApplyNativeWindowStyle()
@@ -1691,7 +4243,35 @@ public partial class MainWindow : Window
             GwlExStyle,
             new nint(
                 exStyle.ToInt64() |
+                WsExTopmost |
                 WsExToolWindow));
+
+        EnsureDockTopmost();
+    }
+
+    private void EnsureDockTopmost()
+    {
+        if (_windowHandle == 0)
+        {
+            return;
+        }
+
+        bool result =
+            SetWindowPos(
+                _windowHandle,
+                HwndTopmost,
+                0,
+                0,
+                0,
+                0,
+                SwpNoMove |
+                SwpNoSize |
+                SwpNoActivate |
+                SwpShowWindow);
+
+        DebugLog.Write(
+            "ZOrder",
+            $"Topmost restored; Success={result}; Edge={_settings.Edge}; Left={Left:0.0}; Top={Top:0.0}; Width={Width:0.0}; Height={Height:0.0}");
     }
 
     private void ApplyGlassBackdrop()
@@ -1794,6 +4374,17 @@ public partial class MainWindow : Window
         nint hWnd,
         int nIndex,
         nint dwNewLong);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        nint hWnd,
+        nint hWndInsertAfter,
+        int X,
+        int Y,
+        int cx,
+        int cy,
+        uint uFlags);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmExtendFrameIntoClientArea(

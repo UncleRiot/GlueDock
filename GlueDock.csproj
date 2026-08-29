@@ -1,15 +1,106 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <UseUwp>true</UseUwp>
+    <UseUwpTools>false</UseUwpTools>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GlueDock</AssemblyName>
     <RootNamespace>GlueDock</RootNamespace>
+    <Version>0.1.0-alpha.1</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <InformationalVersion>0.1.0-alpha.1</InformationalVersion>
+    <Authors>Daniel Capilla</Authors>
+    <Company>Daniel Capilla</Company>
+    <Product>GlueDock</Product>
+    <Description>GlueDock desktop dock application</Description>
+    <Copyright>Copyright © Daniel Capilla</Copyright>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\GlueDock.ico</ApplicationIcon>
   </PropertyGroup>
+<ItemGroup>
+    <Content Include="Resources\GlueDock.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Resources\GlueDock.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Resources\GlueDock_Settings_UnderConstruction.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Resources\ko-fi.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Resources\molotov.jpg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Resources\GlueDock_Iconset\*.*">
+      <Link>GlueDock_Iconset\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Resources\GlueDock_Language\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="GlueDock_Themes\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <Compile Remove="GaussianBlurEffect.cs" />
+    <Compile Remove="GraphicsEffectInterop.cs" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <NativeBlurX64Output>$(MSBuildProjectDirectory)\NativeBlurHost\bin\$(Configuration)\x64\GlueDock.NativeBlur.x64.dll</NativeBlurX64Output>
+    <NativeBlurX86Output>$(MSBuildProjectDirectory)\NativeBlurHost\bin\$(Configuration)\Win32\GlueDock.NativeBlur.x86.dll</NativeBlurX86Output>
+  </PropertyGroup>
+
+  <Target Name="EnsureNativeBlurHostExists"
+          BeforeTargets="Build"
+          Condition="!Exists('$(NativeBlurX64Output)') Or !Exists('$(NativeBlurX86Output)')"
+          DependsOnTargets="BuildNativeBlurHostX64;BuildNativeBlurHostWin32" />
+
+  <Target Name="BuildNativeBlurHost"
+          Condition="'$(BuildNativeBlurHost)' == 'true'"
+          DependsOnTargets="BuildNativeBlurHostX64;BuildNativeBlurHostWin32" />
+
+  <Target Name="BuildNativeBlurHostX64">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\NativeBlurHost\GlueDock.NativeBlur.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=x64" />
+  </Target>
+
+  <Target Name="BuildNativeBlurHostWin32">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\NativeBlurHost\GlueDock.NativeBlur.vcxproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
+
+  <Target Name="CopyNativeBlurHost"
+          AfterTargets="Build">
+    <Copy SourceFiles="$(NativeBlurX64Output)"
+          DestinationFolder="$(TargetDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(NativeBlurX64Output)')" />
+    <Copy SourceFiles="$(NativeBlurX86Output)"
+          DestinationFolder="$(TargetDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(NativeBlurX86Output)')" />
+  </Target>
 
 </Project>

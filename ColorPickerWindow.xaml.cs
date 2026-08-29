@@ -30,6 +30,8 @@ public partial class ColorPickerWindow : Window
 
         InitializeComponent();
 
+        ApplyLanguage();
+
         RgbToHsv(
             initialColor,
             out _hue,
@@ -37,6 +39,30 @@ public partial class ColorPickerWindow : Window
             out _value);
 
         Loaded += ColorPickerWindow_Loaded;
+    }
+
+    private void ApplyLanguage()
+    {
+        Title =
+            App.Language["ColorPicker.Title"];
+
+        RedLabel.Text =
+            App.Language["ColorPicker.Red"];
+
+        GreenLabel.Text =
+            App.Language["ColorPicker.Green"];
+
+        BlueLabel.Text =
+            App.Language["ColorPicker.Blue"];
+
+        HexLabel.Text =
+            App.Language["ColorPicker.Hex"];
+
+        CancelButton.Content =
+            App.Language["ColorPicker.Cancel"];
+
+        OkButton.Content =
+            App.Language["ColorPicker.Ok"];
     }
 
     private void ColorPickerWindow_Loaded(
