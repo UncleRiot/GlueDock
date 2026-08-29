@@ -1,7 +1,9 @@
 ## GlueDock
+Customize it for you everyday needs!
 ... comming soon... 
 
 Be part of the development, post feature-requests, bugs, skins, icons, everything under:
+Customize it for you everyday need!
 
 [🐞 Issues](https://github.com/UncleRiot/GlueDock/issues)  
 [💬 Discussions](https://github.com/UncleRiot/GlueDock/discussions)
