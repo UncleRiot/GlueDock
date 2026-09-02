@@ -28,11 +28,11 @@ This warning does not automatically mean that the application is malicious.
 
 Only continue if you downloaded c² flux from the official GitHub repository.
 
-### How to start c² flux
+### How to start GlueDock flux
 
 1. Click **More info**.
 2. Click **Run anyway**.
 3. Confirm the Windows security prompt, if one appears.
-4. c² flux will start.
+4. GlueDock flux will start.
 
 > **Important:** Do not run the application if you downloaded it from an unknown or untrusted source.
