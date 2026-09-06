@@ -1,4 +1,6 @@
-<img width="2172" height="724" alt="Gluedock_big" src="https://github.com/user-attachments/assets/d065e66f-fe0f-42d1-816a-4d4323588790" />
+<img width="1086" height="362" alt="grafik" src="https://github.com/user-attachments/assets/7b82d852-65af-4d38-add3-5cd8dbbc0e46" />
+
+
 
 
 
