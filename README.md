@@ -1,4 +1,9 @@
-## GlueDock
+<img width="1411" height="443" alt="grafik" src="https://github.com/user-attachments/assets/c2af9a72-af59-448b-a849-50e8dd8418f0" />
+
+
+
+
+
 Customize it for you everyday needs!
 ... comming soon... 
 
