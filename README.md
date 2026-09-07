@@ -18,13 +18,33 @@ Customize it for you everyday need!
 
 <br><br>
 
-<img width="330" height="145" alt="grafik" src="https://github.com/user-attachments/assets/e9e90c3f-3bf7-4330-b905-19a9a9abb299" />
+<img width="836" height="172" alt="grafik" src="https://github.com/user-attachments/assets/3327214e-96ea-496d-a7d7-23456f4e573a" />
+
 
 <br><br>
 
-<img width="328" height="757" alt="grafik" src="https://github.com/user-attachments/assets/f892ccd8-9412-4147-b1b7-ff82e6f399e6" />
+<img width="823" height="818" alt="grafik" src="https://github.com/user-attachments/assets/8d72b9d0-46cf-4d1d-926d-78f647d0f69b" />
+
 
 <br><br>
+
+<img width="2166" height="1366" alt="grafik" src="https://github.com/user-attachments/assets/b60ef865-16e0-4832-8522-fd04452e22c8" />
+
+
+<br><br>
+
+<img width="1006" height="837" alt="grafik" src="https://github.com/user-attachments/assets/20601c26-688c-498f-b7a9-ed5688512e5f" />
+
+<br><br>
+
+<img width="988" height="738" alt="grafik" src="https://github.com/user-attachments/assets/cd895f65-3e86-48a3-9e82-dffa5f4b34a9" />
+
+<br><br>
+
+<img width="1006" height="849" alt="grafik" src="https://github.com/user-attachments/assets/12c71ca1-8c79-4c12-9f96-5f7a1933f189" />
+
+<br><br>
+
 
 ## Windows SmartScreen warning
 
