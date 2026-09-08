@@ -9,12 +9,45 @@
 
 Customize it for you everyday needs!
 
-
-Be part of the development, post feature-requests, bugs, skins, icons, everything under:
-Customize it for you everyday need!
-
 [🐞 Issues](https://github.com/UncleRiot/GlueDock/issues)  
 [💬 Discussions](https://github.com/UncleRiot/GlueDock/discussions)
+
+
+## 🎨 Theme Development
+
+GlueDock supports fully customizable themes, including animated gradients, glowing particles, stars, flame effects and advanced glass styling.
+
+Create anything from a subtle animated background to a full dynamic fireplace-style dock.
+
+### What you can customize
+
+- Animated gradient backgrounds
+- Rotating glass gradients
+- Glow and star particle effects
+- Animated flame effects
+- Colors, transparency and highlights
+- Blur and glow intensity
+- Particle density and movement
+- Animation speed and timing
+- Deterministic layouts using seeds
+
+### Start creating your own themes
+
+The full guide includes three examples from simple to advanced:
+
+1. Simple animated gradient
+2. Rotating gradient with glowing stars
+3. Animated fireplace theme
+
+It also explains important theme properties, performance considerations and troubleshooting.
+
+👉 **[Creating Animated Themes](docs/CREATING-THEMES.md)**
+
+Custom themes are stored in:
+
+`GlueDock_Themes`
+
+You can start by copying an existing theme and modifying it to match your own style.
 
 <br><br>
 
