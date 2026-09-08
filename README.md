@@ -50,17 +50,17 @@ Customize it for you everyday need!
 
 <img width="438" height="173" alt="grafik" src="https://github.com/user-attachments/assets/429951bb-ab24-49a3-89a8-ecb4b0a7fec1" />
 
-Windows SmartScreen may block c² flux because the application is not yet widely recognized.
+Windows SmartScreen may block GlueDock because the application is not yet widely recognized.
 
 This warning does not automatically mean that the application is malicious.
 
-Only continue if you downloaded c² flux from the official GitHub repository.
+Only continue if you downloaded GlueDock from the official GitHub repository.
 
-### How to start GlueDock flux
+### How to start GlueDock
 
 1. Click **More info**.
 2. Click **Run anyway**.
 3. Confirm the Windows security prompt, if one appears.
-4. GlueDock flux will start.
+4. GlueDock will start.
 
 > **Important:** Do not run the application if you downloaded it from an unknown or untrusted source.
