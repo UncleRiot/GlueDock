@@ -1,523 +1,656 @@
-﻿<Window x:Class="GlueDock.SettingsWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Icon="Resources/GlueDock.png"
-        Title="GlueDock Einstellungen"
-        Width="650"
-        Height="590"
-        MinWidth="590"
-        MinHeight="520"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="CanResizeWithGrip"
-        Background="#FF171A20">
-    <Grid Margin="16">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:dialogTheme="clr-namespace:GlueDock;assembly=GlueDock.WidgetApi" xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework" x:Class="GlueDock.SettingsWindow" Icon="Resources/GlueDock.png" Title="" Width="{x:Static dialogTheme:DockDialogTheme.SettingsHubDialogWidth}" Height="590" MinWidth="{x:Static dialogTheme:DockDialogTheme.SettingsHubDialogWidth}" MinHeight="520" WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip" WindowStyle="None" AllowsTransparency="True" Background="Transparent">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="46" ResizeBorderThickness="6" CornerRadius="0" GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+    <!-- GlueDock UI rule: SettingsWindow is the central Settings Hub.
+         Navigation is hosted on the left; migrated pages use DockDialogTheme / DockDialogThemeService.
+         Existing settings logic remains the single source of truth during incremental migration. -->
+    <Border x:Name="WindowBorder" BorderThickness="1" Background="Transparent">
+        <Grid>
+            <Border x:Name="GlassSurfaceBorder" Background="Transparent" IsHitTestVisible="False" Visibility="Collapsed"/>
+
+            <Border x:Name="GlassHighlightBorder" Background="Transparent" BorderBrush="Transparent" BorderThickness="0" IsHitTestVisible="False" Visibility="Collapsed"/>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="46"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="16,8,10,0" Background="Transparent">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="SettingsHubTitleText" VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold"/>
+
+                    <TextBlock x:Name="SettingsHubVersionText"
+                               Grid.Column="1"
+                               Margin="0,0,10,0"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               FontSize="11"
+                               Opacity="0.55"
+                               IsHitTestVisible="False"/>
+
+                    <Button x:Name="SettingsHubCloseButton" Grid.Column="2" Width="32" Height="30" Padding="0" FontFamily="Segoe MDL2 Assets" Content="" shell:WindowChrome.IsHitTestVisibleInChrome="True" Click="CloseButton_Click"/>
+                </Grid>
+
+                <Grid x:Name="SettingsHubRoot" Grid.Row="1" Margin="16,4,16,16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SettingsHubNavigationPaneWidth}"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TabControl Grid.Row="0">
-            <TabItem x:Name="GeneralTab" Header="General">
-                <Grid Margin="18">
-                    <StackPanel>
-                        <CheckBox x:Name="StartWithWindowsCheckBox"
-                                  Content="Start with Windows"
-                                  Margin="0,0,0,16"
-                                  Checked="StartWithWindowsCheckBox_Changed"
-                                  Unchecked="StartWithWindowsCheckBox_Changed" />
+        <Border x:Name="SettingsNavigationPane" Grid.Column="0" Grid.RowSpan="2" Margin="0,0,14,0" Padding="12" BorderThickness="1" CornerRadius="{x:Static dialogTheme:DockDialogTheme.StandardCornerRadius}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                        <CheckBox x:Name="CollapseDisabledCheckBox"
-                                  Content="Disable collapsing"
-                                  Margin="0,0,0,16"
-                                  Checked="CollapseDisabledCheckBox_Changed"
-                                  Unchecked="CollapseDisabledCheckBox_Changed" />
+                <TextBlock x:Name="GeneralDockSettingsHeaderText" Grid.Row="0" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
 
-                        <TextBlock x:Name="CollapseDelayLabel" Text="Collapse delay" />
-                        <StackPanel Orientation="Horizontal"
-                                    Margin="0,6,0,0">
-                            <Slider x:Name="CollapseDelaySlider"
-                                    Width="360"
-                                    Minimum="0"
-                                    Maximum="3000"
-                                    TickFrequency="50"
-                                    IsSnapToTickEnabled="True"
-                                    ValueChanged="CollapseDelaySlider_ValueChanged" />
-                            <TextBlock x:Name="CollapseDelayText"
-                                       Width="90"
-                                       Margin="12,0,0,0"
-                                       VerticalAlignment="Center" />
-                        </StackPanel>
+                <ListBox x:Name="SettingsNavigationListBox" Grid.Row="1" BorderThickness="0" Background="Transparent" SelectionChanged="SettingsNavigationListBox_SelectionChanged">
+                    <ListBoxItem x:Name="GeneralNavigationItem" Tag="0"/>
+                    <ListBoxItem x:Name="AppearanceNavigationItem" Tag="1"/>
+                    <ListBoxItem x:Name="BehaviorNavigationItem" Tag="2"/>
+                    <ListBoxItem x:Name="DockNavigationItem" Tag="3"/>
+                    <ListBoxItem x:Name="WidgetsNavigationItem" Tag="4"/>
+                    <ListBoxItem x:Name="ProfilesNavigationItem" Tag="5"/>
+                    <ListBoxItem x:Name="AdvancedNavigationItem" Tag="6"/>
+                </ListBox>
 
-                        <TextBlock x:Name="SubdockCollapseDelayLabel"
-                                   Text="Subdock collapse delay"
-                                   Margin="0,18,0,0" />
-                        <StackPanel Orientation="Horizontal"
-                                    Margin="0,6,0,0">
-                            <Slider x:Name="SubdockCollapseDelaySlider"
-                                    Width="360"
-                                    Minimum="0"
-                                    Maximum="3000"
-                                    TickFrequency="50"
-                                    IsSnapToTickEnabled="True"
-                                    ValueChanged="SubdockCollapseDelaySlider_ValueChanged" />
-                            <TextBlock x:Name="SubdockCollapseDelayText"
-                                       Width="90"
-                                       Margin="12,0,0,0"
-                                       VerticalAlignment="Center" />
-                        </StackPanel>
+                <Grid Grid.Row="2" Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" Text="" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
 
-                        <TextBlock x:Name="LanguageLabel"
-                                   Text="Language"
-                                   Margin="0,18,0,0" />
-                        <ComboBox x:Name="LanguageComboBox"
-                                  Width="220"
-                                  HorizontalAlignment="Left"
-                                  Margin="0,6,0,0"
-                                  DisplayMemberPath="DisplayName"
-                                  SelectedValuePath="Code"
-                                  SelectionChanged="LanguageComboBox_SelectionChanged" />
-                    </StackPanel>
+                    <TextBox x:Name="SettingsSearchTextBox" Grid.Column="1" Width="220" Height="28" HorizontalAlignment="Left" VerticalContentAlignment="Center" TextChanged="SettingsSearchTextBox_TextChanged"/>
 
-                    <Image Source="Resources/GlueDock_Settings_UnderConstruction.png"
-                           Width="190"
-                           Height="90"
-                           Stretch="Uniform"
-                           HorizontalAlignment="Right"
-                           VerticalAlignment="Bottom" />
+                    <Popup x:Name="SettingsSearchResultsPopup" PlacementTarget="{Binding ElementName=SettingsSearchTextBox}" Placement="Top" StaysOpen="True" AllowsTransparency="True">
+                        <Border x:Name="SettingsSearchResultsBorder" BorderThickness="1" MinWidth="320" MaxWidth="520" MaxHeight="280">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ListBox x:Name="SettingsSearchResultsListBox" SelectionChanged="SettingsSearchResultsListBox_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <ContentPresenter Content="{Binding DisplayContent}"/>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </ScrollViewer>
+                        </Border>
+                    </Popup>
                 </Grid>
+            </Grid>
+        </Border>
+        <TabControl x:Name="SettingsTabControl" Grid.Column="1" Grid.Row="0" Background="Transparent" BorderThickness="0" SelectionChanged="SettingsTabControl_SelectionChanged">
+            <TabControl.Template>
+                <ControlTemplate TargetType="{x:Type TabControl}">
+                    <ContentPresenter ContentSource="SelectedContent"/>
+                </ControlTemplate>
+            </TabControl.Template>
+            <TabItem x:Name="GeneralTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="18"><Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="LanguageLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="LanguageComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="220" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" DisplayMemberPath="DisplayName" SelectedValuePath="Code" SelectionChanged="LanguageComboBox_SelectionChanged"/>
+                        </Grid>
+
+                        <CheckBox x:Name="StartWithWindowsCheckBox" Margin="0,4,0,8" Checked="StartWithWindowsCheckBox_Changed" Unchecked="StartWithWindowsCheckBox_Changed"/>
+
+                        <CheckBox x:Name="AlwaysOnTopCheckBox" Margin="0,4,0,8" Checked="AlwaysOnTopCheckBox_Changed" Unchecked="AlwaysOnTopCheckBox_Changed"/>
+
+                        <TextBlock x:Name="BackupRestoreLabel" FontWeight="SemiBold" Margin="0,0,0,8"/>
+
+                        <TextBlock x:Name="BackupRestoreInfoText" Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                        <WrapPanel Margin="0,0,0,18">
+                            <Button x:Name="CreateBackupButton" Width="130" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" Click="CreateBackupButton_Click"/>
+                            <Button x:Name="RestoreBackupButton" Width="130" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Click="RestoreBackupButton_Click"/>
+                        </WrapPanel>
+
+                        </StackPanel></ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="AppearanceTab" Header="Appearance">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <TabItem x:Name="AppearanceTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="18">
-                    <TextBlock x:Name="ThemeLabel"
-                               Text="Theme" />
-                    <ComboBox x:Name="ThemeComboBox"
-                              Width="220"
-                              HorizontalAlignment="Left"
-                              Margin="0,6,0,16"
-                              DisplayMemberPath="DisplayName"
-                              SelectedValuePath="Id"
-                              DropDownOpened="ThemeComboBox_DropDownOpened"
-                              SelectionChanged="ThemeComboBox_SelectionChanged" />
 
-                    <TextBlock x:Name="EdgeBarColorLabel" Text="Edge bar color" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Border x:Name="BarColorPreview"
-                                Width="46"
-                                Height="26"
-                                CornerRadius="4"
-                                BorderBrush="#66FFFFFF"
-                                BorderThickness="1"
-                                Margin="0,0,10,0" />
-                        <Button x:Name="BarColorButton"
-                                Content="Choose color..."
-                                Width="120"
-                                Padding="8,4"
-                                Click="ChooseBarColor_Click" />
-                    </StackPanel>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ThemeLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="220" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" DisplayMemberPath="DisplayName" SelectedValuePath="Id" DropDownOpened="ThemeComboBox_DropDownOpened" SelectionChanged="ThemeComboBox_SelectionChanged"/>
+                        </Grid>
 
-                    <CheckBox x:Name="DockBorderEnabledCheckBox"
-                              Content="Show dock border"
-                              Margin="0,0,0,10"
-                              Checked="DockBorderEnabledCheckBox_Changed"
-                              Unchecked="DockBorderEnabledCheckBox_Changed" />
+<Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="AnimationLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="AnimationStyleComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="220" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" SelectionChanged="AnimationStyleComboBox_SelectionChanged">
+                                <ComboBoxItem x:Name="AnimationFadeItem" Tag="Fade"/>
+                                <ComboBoxItem x:Name="AnimationSlideItem" Tag="Slide"/>
+                                <ComboBoxItem x:Name="AnimationZoomItem" Tag="Zoom"/>
+                            </ComboBox>
+                        </Grid>
 
-                    <TextBlock x:Name="DockBorderColorLabel" Text="Dock border color" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Border x:Name="DockBorderColorPreview"
-                                Width="46"
-                                Height="26"
-                                CornerRadius="4"
-                                BorderBrush="#66FFFFFF"
-                                BorderThickness="1"
-                                Margin="0,0,10,0" />
-                        <Button x:Name="DockBorderColorButton"
-                                Content="Choose color..."
-                                Width="120"
-                                Padding="8,4"
-                                Click="ChooseDockBorderColor_Click" />
-                    </StackPanel>
+<Grid Margin="0,4,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="HoverEffectLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="HoverEffectComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="220" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" SelectionChanged="HoverEffectComboBox_SelectionChanged">
+                                <ComboBoxItem x:Name="HoverNoneItem" Tag="None"/>
+                                <ComboBoxItem x:Name="HoverZoomItem" Tag="Zoom"/>
+                                <ComboBoxItem x:Name="HoverGlowItem" Tag="Glow"/>
+                                <ComboBoxItem x:Name="HoverHighlightItem" Tag="Highlight"/>
+                            </ComboBox>
+                        </Grid>
 
-                    <TextBlock x:Name="EdgeBarThicknessLabel" Text="Edge bar thickness" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Slider x:Name="BarThicknessSlider"
-                                Width="360"
-                                Minimum="2"
-                                Maximum="24"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="BarThicknessSlider_ValueChanged" />
-                        <TextBlock x:Name="BarThicknessText"
-                                   Width="90"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SettingsDialogOpacityLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="SettingsDialogOpacitySlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.10" Maximum="1.00" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="SettingsDialogOpacitySlider_ValueChanged"/>
+                                <TextBlock x:Name="SettingsDialogOpacityText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
 
-                    <TextBlock x:Name="DockScaleLabel" Text="Dock scaling" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Slider x:Name="DockScaleSlider"
-                                Width="360"
-                                Minimum="0.60"
-                                Maximum="2.00"
-                                TickFrequency="0.05"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="DockScaleSlider_ValueChanged" />
-                        <TextBlock x:Name="DockScaleText"
-                                   Width="90"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="OpacityLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="OpacitySlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.10" Maximum="1.00" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="OpacitySlider_ValueChanged"/>
+                                <TextBlock x:Name="OpacityText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
 
-                    <TextBlock x:Name="ItemSpacingLabel" Text="Item spacing" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Slider x:Name="ItemSpacingSlider"
-                                Width="360"
-                                Minimum="10"
-                                Maximum="60"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="ItemSpacingSlider_ValueChanged" />
-                        <TextBlock x:Name="ItemSpacingText"
-                                   Width="90"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="BlurLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="BlurSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="BlurSlider_ValueChanged"/>
+                                <TextBlock x:Name="BlurText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
 
-                    <TextBlock x:Name="DockThicknessScaleLabel" Text="Dock height" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Slider x:Name="DockThicknessScaleSlider"
-                                Width="360"
-                                Minimum="0.50"
-                                Maximum="1.00"
-                                TickFrequency="0.05"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="DockThicknessScaleSlider_ValueChanged" />
-                        <TextBlock x:Name="DockThicknessScaleText"
-                                   Width="90"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
+                                                                        <CheckBox x:Name="ShowItemLabelsCheckBox" Margin="0,4,0,8" Checked="ShowItemLabelsCheckBox_Changed" Unchecked="ShowItemLabelsCheckBox_Changed"/>
 
-                    <CheckBox x:Name="ShowItemLabelsCheckBox"
-                              Content="Show names below icons"
-                              Margin="0,0,0,10"
-                              Checked="ShowItemLabelsCheckBox_Changed"
-                              Unchecked="ShowItemLabelsCheckBox_Changed" />
+                        <CheckBox x:Name="ShowFilePreviewsCheckBox" Margin="0,4,0,8" Checked="ShowFilePreviewsCheckBox_Changed" Unchecked="ShowFilePreviewsCheckBox_Changed"/>
 
-                    <CheckBox x:Name="ShowFilePreviewsCheckBox"
-                              Content="Show file previews"
-                              Margin="0,0,0,10"
-                              Checked="ShowFilePreviewsCheckBox_Changed"
-                              Unchecked="ShowFilePreviewsCheckBox_Changed" />
+                        <Grid Margin="0,4,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ShortcutArrowLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ShortcutArrowComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="260" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" SelectionChanged="ShortcutArrowComboBox_SelectionChanged">
+                                <ComboBoxItem x:Name="ShortcutArrowDefaultItem" Tag="Default"/>
+                                <ComboBoxItem x:Name="ShortcutArrowSmallItem" Tag="Small"/>
+                                <ComboBoxItem x:Name="ShortcutArrowNoneItem" Tag="None"/>
+                            </ComboBox>
+                        </Grid>
 
-                    <CheckBox x:Name="UseSmallShortcutOverlayCheckBox"
-                              Content="Use smaller shortcut arrow"
-                              Margin="0,0,0,16"
-                              Checked="UseSmallShortcutOverlayCheckBox_Changed"
-                              Unchecked="UseSmallShortcutOverlayCheckBox_Changed" />
-
-                    <TextBlock x:Name="OpacityLabel" Text="Opacity" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Slider x:Name="OpacitySlider"
-                                Width="360"
-                                Minimum="0.10"
-                                Maximum="1.00"
-                                TickFrequency="0.05"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="OpacitySlider_ValueChanged" />
-                        <TextBlock x:Name="OpacityText"
-                                   Width="90"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-
-                    <TextBlock x:Name="BlurLabel" Text="Blur" />
-                    <StackPanel Orientation="Horizontal"
-                                Margin="0,6,0,16">
-                        <Slider x:Name="BlurSlider"
-                                Width="360"
-                                Minimum="0"
-                                Maximum="100"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="BlurSlider_ValueChanged" />
-                        <TextBlock x:Name="BlurText"
-                                   Width="90"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-
-                    <TextBlock x:Name="AnimationLabel" Text="Animation" />
-                    <ComboBox x:Name="AnimationStyleComboBox"
-                              Width="220"
-                              HorizontalAlignment="Left"
-                              Margin="0,6,0,0"
-                              SelectionChanged="AnimationStyleComboBox_SelectionChanged">
-                        <ComboBoxItem Content="Fade"
-                                      Tag="Fade" />
-                        <ComboBoxItem Content="Slide"
-                                      Tag="Slide" />
-                        <ComboBoxItem Content="Zoom"
-                                      Tag="Zoom" />
-                    </ComboBox>
-                    </StackPanel>
+                        </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="BehaviorTab" Header="Behavior">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <TabItem x:Name="BehaviorTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="18">
-                        <TextBlock x:Name="HoverEffectLabel"
-                                   Text="Hover effect" />
-                        <ComboBox x:Name="HoverEffectComboBox"
-                                  Width="220"
-                                  HorizontalAlignment="Left"
-                                  Margin="0,6,0,24"
-                                  SelectionChanged="HoverEffectComboBox_SelectionChanged">
-                            <ComboBoxItem Content="None"
-                                          Tag="None" />
-                            <ComboBoxItem Content="Zoom"
-                                          Tag="Zoom" />
-                            <ComboBoxItem Content="Glow"
-                                          Tag="Glow" />
-                            <ComboBoxItem Content="Highlight"
-                                          Tag="Highlight" />
-                        </ComboBox>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="DockScaleLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="DockScaleSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.50" Maximum="1.50" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="DockScaleSlider_ValueChanged"/>
+                                <TextBlock x:Name="DockScaleText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
 
-                        <TextBlock x:Name="ReservedBehaviorLabel"
-                                   Text="Reserved for additional options"
-                                   FontWeight="SemiBold"
-                                   Margin="0,0,0,12" />
-                        <CheckBox Content="Option 01" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 02" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 03" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 04" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 05" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 06" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 07" IsEnabled="False" Margin="0,4"/>
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="DockThicknessScaleLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="DockThicknessScaleSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.30" Maximum="1.50" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="DockThicknessScaleSlider_ValueChanged"/>
+                                <TextBlock x:Name="DockThicknessScaleText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
 
-            <TabItem x:Name="DockTab" Header="Dock">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="18">
-                        <TextBlock x:Name="SubmenuIconLabel"
-                                   Text="Subdock icon"
-                                   FontWeight="SemiBold"
-                                   Margin="0,0,0,8" />
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ItemSpacingLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="ItemSpacingSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="10" Maximum="60" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="ItemSpacingSlider_ValueChanged"/>
+                                <TextBlock x:Name="ItemSpacingText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
 
-                        <StackPanel Orientation="Horizontal"
-                                    Margin="0,0,0,8">
-                            <Border Width="52"
-                                    Height="52"
-                                    Margin="0,0,12,0"
-                                    CornerRadius="8"
-                                    BorderBrush="#44FFFFFF"
-                                    BorderThickness="1">
-                                <Image x:Name="SubmenuIconPreview"
-                                       Width="40"
-                                       Height="40"
-                                       Stretch="Uniform" />
-                            </Border>
+                        <TextBlock x:Name="RootLayoutLabel" Text="Root dock layout" FontWeight="SemiBold" Margin="0,0,0,8"/>
 
-                            <StackPanel>
-                                <Button x:Name="SubmenuWindowsIconButton"
-                                        Content="Choose Windows icon..."
-                                        Width="228"
-                                        Padding="8,4"
-                                        HorizontalAlignment="Left"
-                                        Click="SubmenuWindowsIconButton_Click" />
-
-                                <TextBlock x:Name="SubmenuWindowsIconSelectionText"
-                                           Width="228"
-                                           Margin="0,6,0,0"
-                                           Opacity="0.75"
-                                           TextTrimming="CharacterEllipsis" />
-
-                                <StackPanel Orientation="Horizontal"
-                                            Margin="0,8,0,0">
-                                    <Button x:Name="SubmenuLoadImageButton"
-                                            Content="Load image..."
-                                            Width="110"
-                                            Padding="8,4"
-                                            Margin="0,0,8,0"
-                                            Click="SubmenuLoadImageButton_Click" />
-
-                                    <Button x:Name="SubmenuDefaultIconButton"
-                                            Content="Use default"
-                                            Width="110"
-                                            Padding="8,4"
-                                            Click="SubmenuDefaultIconButton_Click" />
-                                </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock x:Name="RootMaxColumnsLabel" Text="Max columns" Width="150" VerticalAlignment="Center"/>
+                            <TextBox x:Name="RootMaxColumnsTextBox" Width="42" Height="28" MaxLength="3" VerticalContentAlignment="Center" HorizontalContentAlignment="Right" TextChanged="RootMaxColumnsTextBox_TextChanged" LostKeyboardFocus="LayoutValueTextBox_LostKeyboardFocus"/>
+                            <StackPanel Width="18" Height="28" Margin="3,0,0,0">
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="RootMaxColumnsUpButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,4 L 3.5,0 L 7,4" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="RootMaxColumnsDownButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,0 L 3.5,4 L 7,0" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
                             </StackPanel>
                         </StackPanel>
 
-                        <TextBlock x:Name="SubmenuRepositoryInfoText"
-                                   Text="External images are copied to GlueDock_Repository\Icons."
-                                   Opacity="0.75"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,18" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                            <TextBlock x:Name="RootMaxRowsLabel" Text="Max rows" Width="150" VerticalAlignment="Center"/>
+                            <TextBox x:Name="RootMaxRowsTextBox" Width="42" Height="28" MaxLength="3" VerticalContentAlignment="Center" HorizontalContentAlignment="Right" TextChanged="RootMaxRowsTextBox_TextChanged" LostKeyboardFocus="LayoutValueTextBox_LostKeyboardFocus"/>
+                            <StackPanel Width="18" Height="28" Margin="3,0,0,0">
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="RootMaxRowsUpButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,4 L 3.5,0 L 7,4" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="RootMaxRowsDownButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,0 L 3.5,4 L 7,0" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                            </StackPanel>
+                        </StackPanel>
 
-                        <TextBlock x:Name="ReservedDockLabel"
-                                   Text="Reserved for additional dock options"
-                                   FontWeight="SemiBold"
-                                   Margin="0,0,0,12" />
-                        <CheckBox Content="Option 08" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 09" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 10" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 11" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 12" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 13" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 14" IsEnabled="False" Margin="0,4"/>
-                    </StackPanel>
+                        <CheckBox x:Name="DockBorderEnabledCheckBox" Margin="0,4,0,8" Checked="DockBorderEnabledCheckBox_Changed" Unchecked="DockBorderEnabledCheckBox_Changed"/>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="DockBorderColorLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                <Border x:Name="DockBorderColorPreview" Width="{x:Static dialogTheme:DockDialogTheme.ColorPreviewWidth}" Height="{x:Static dialogTheme:DockDialogTheme.ColorPreviewHeight}" CornerRadius="{x:Static dialogTheme:DockDialogTheme.StandardCornerRadius}" BorderThickness="1" VerticalAlignment="Center"/>
+                                <Button x:Name="DockBorderColorButton" Width="{x:Static dialogTheme:DockDialogTheme.ColorButtonWidth}" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="10,0,0,0" Click="ChooseDockBorderColor_Click"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="EdgeBarColorLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                <Border x:Name="BarColorPreview" Width="{x:Static dialogTheme:DockDialogTheme.ColorPreviewWidth}" Height="{x:Static dialogTheme:DockDialogTheme.ColorPreviewHeight}" CornerRadius="{x:Static dialogTheme:DockDialogTheme.StandardCornerRadius}" BorderThickness="1" VerticalAlignment="Center"/>
+                                <Button x:Name="BarColorButton" Width="{x:Static dialogTheme:DockDialogTheme.ColorButtonWidth}" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="10,0,0,0" Click="ChooseBarColor_Click"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="CollapsedBarOpacityLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="CollapsedBarOpacitySlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.10" Maximum="1.00" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="CollapsedBarOpacitySlider_ValueChanged"/>
+                                <TextBlock x:Name="CollapsedBarOpacityText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="EdgeBarThicknessLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="BarThicknessSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="3" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="BarThicknessSlider_ValueChanged"/>
+                                <TextBlock x:Name="BarThicknessText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+<Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="CollapseDelayLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="CollapseDelaySlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0" Maximum="3000" TickFrequency="50" IsSnapToTickEnabled="True" ValueChanged="CollapseDelaySlider_ValueChanged"/>
+                                <TextBlock x:Name="CollapseDelayText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <CheckBox x:Name="ShowRootDockTooltipsCheckBox" Margin="0,4,0,8" Checked="ShowRootDockTooltipsCheckBox_Changed" Unchecked="ShowRootDockTooltipsCheckBox_Changed"/>
+
+                        <CheckBox x:Name="CollapseDisabledCheckBox" Margin="0,4,0,8" Checked="CollapseDisabledCheckBox_Changed" Unchecked="CollapseDisabledCheckBox_Changed"/>
+
+                                                </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="ProfilesTab" Header="Profiles">
+            <TabItem x:Name="DockTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18">
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SubDockThemeModeLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="SubDockThemeModeComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="260" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" SelectionChanged="SubDockThemeModeComboBox_SelectionChanged">
+                                <ComboBoxItem x:Name="SubDockThemeInheritFullItem" Tag="InheritFull"/>
+                                <ComboBoxItem x:Name="SubDockThemeInheritAppearanceItem" Tag="InheritAppearance"/>
+                                <ComboBoxItem x:Name="SubDockThemeOverrideItem" Tag="Override"/>
+                            </ComboBox>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SubDockThemeOverrideLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="SubDockThemeComboBox" Grid.Column="1" Grid.ColumnSpan="2" Width="260" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" HorizontalAlignment="Left" DisplayMemberPath="DisplayName" SelectedValuePath="Id" DropDownOpened="SubDockThemeComboBox_DropDownOpened" SelectionChanged="SubDockThemeComboBox_SelectionChanged"/>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SubDockScaleLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="SubDockScaleSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.50" Maximum="1.50" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="SubDockScaleSlider_ValueChanged"/>
+                                <TextBlock x:Name="SubDockScaleText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SubDockThicknessScaleLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="SubDockThicknessScaleSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0.30" Maximum="1.50" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="SubDockThicknessScaleSlider_ValueChanged"/>
+                                <TextBlock x:Name="SubDockThicknessScaleText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,4,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SubDockItemSpacingLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="SubDockItemSpacingSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="10" Maximum="60" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="SubDockItemSpacingSlider_ValueChanged"/>
+                                <TextBlock x:Name="SubDockItemSpacingText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+<Grid Margin="0,4,0,8" VerticalAlignment="Top">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SubdockCollapseDelayLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="SubdockCollapseDelaySlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="0" Maximum="3000" TickFrequency="50" IsSnapToTickEnabled="True" ValueChanged="SubdockCollapseDelaySlider_ValueChanged"/>
+                                <TextBlock x:Name="SubdockCollapseDelayText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock x:Name="SubDockLayoutLabel" Text="Subdock layout" FontWeight="SemiBold" Margin="0,0,0,8"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock x:Name="SubDockMaxColumnsLabel" Text="Max columns" Width="150" VerticalAlignment="Center"/>
+                            <TextBox x:Name="SubDockMaxColumnsTextBox" Width="42" Height="28" MaxLength="3" VerticalContentAlignment="Center" HorizontalContentAlignment="Right" TextChanged="SubDockMaxColumnsTextBox_TextChanged" LostKeyboardFocus="LayoutValueTextBox_LostKeyboardFocus"/>
+                            <StackPanel Width="18" Height="28" Margin="3,0,0,0">
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="SubDockMaxColumnsUpButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,4 L 3.5,0 L 7,4" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="SubDockMaxColumnsDownButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,0 L 3.5,4 L 7,0" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                            <TextBlock x:Name="SubDockMaxRowsLabel" Text="Max rows" Width="150" VerticalAlignment="Center"/>
+                            <TextBox x:Name="SubDockMaxRowsTextBox" Width="42" Height="28" MaxLength="3" VerticalContentAlignment="Center" HorizontalContentAlignment="Right" TextChanged="SubDockMaxRowsTextBox_TextChanged" LostKeyboardFocus="LayoutValueTextBox_LostKeyboardFocus"/>
+                            <StackPanel Width="18" Height="28" Margin="3,0,0,0">
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="SubDockMaxRowsUpButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,4 L 3.5,0 L 7,4" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                                <RepeatButton Width="18" Height="14" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="SubDockMaxRowsDownButton_Click">
+                                    <Viewbox Width="7" Height="4" Stretch="Fill" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M 0,0 L 3.5,4 L 7,0" Stroke="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" StrokeThickness="1.2" StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
+                                    </Viewbox>
+                                </RepeatButton>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <TextBlock x:Name="SubmenuIconLabel" Text="Subdock icon" FontWeight="SemiBold" Margin="0,0,0,8"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Border Width="52" Height="52" Margin="0,0,12,0" CornerRadius="8" BorderBrush="#44FFFFFF" BorderThickness="1">
+                                <Image x:Name="SubmenuIconPreview" Width="40" Height="40" Stretch="Uniform"/>
+                            </Border>
+
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="SubmenuWindowsIconButton" Content="Choose Windows icon..." Width="156" Padding="8,4" Margin="0,0,8,0" Click="SubmenuWindowsIconButton_Click"/>
+                                    <Button x:Name="SubmenuLoadImageButton" Content="Load image..." Width="104" Padding="8,4" Margin="0,0,8,0" Click="SubmenuLoadImageButton_Click"/>
+                                    <Button x:Name="SubmenuDefaultIconButton" Content="Use default" Width="104" Padding="8,4" Click="SubmenuDefaultIconButton_Click"/>
+                                </StackPanel>
+
+                                <TextBlock x:Name="SubmenuWindowsIconSelectionText" Width="380" Margin="0,6,0,0" Opacity="0.75" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <TextBlock x:Name="SubmenuRepositoryInfoText" Text="External images are copied to GlueDock_Repository\Icons." Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,0"/>
+                    <CheckBox x:Name="ShowSubDockTooltipsCheckBox" Margin="0,4,0,16" Checked="ShowSubDockTooltipsCheckBox_Changed" Unchecked="ShowSubDockTooltipsCheckBox_Changed"/>
+
+                        <CheckBox x:Name="SubdockOpenOnClickOnlyCheckBox" Margin="0,4,0,12" Checked="SubdockOpenOnClickOnlyCheckBox_Changed" Unchecked="SubdockOpenOnClickOnlyCheckBox_Changed"/>
+
+                                                </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="WidgetsTab">
                 <Grid Margin="18">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Text="Select a profile for live preview. Changes remain temporary until Apply is clicked."
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,12" />
+                    <TextBlock x:Name="AvailableWidgetsLabel" FontWeight="SemiBold" Margin="0,4,0,10"/>
 
-                    <ListBox x:Name="ProfilesListBox"
-                             Grid.Row="1"
-                             MinHeight="180"
-                             SelectionChanged="ProfilesListBox_SelectionChanged">
+                    <Grid Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Margin="8,0,8,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="42"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock x:Name="WidgetNameColumn" Grid.Column="0" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="WidgetDescriptionColumn" Grid.Column="1" FontWeight="SemiBold" Margin="8,0,8,0"/>
+                            <TextBlock x:Name="WidgetAddedColumn" Grid.Column="2" FontWeight="SemiBold" FontSize="10" TextAlignment="Center"/>
+                        </Grid>
+
+                        <ListBox x:Name="AvailableWidgetsListBox" Grid.Row="1" MinHeight="180" HorizontalContentAlignment="Stretch" SelectionChanged="AvailableWidgetsListBox_SelectionChanged">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="4,5">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="42"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold" VerticalAlignment="Top"/>
+
+                                        <StackPanel Grid.Column="1" Margin="8,0,8,0">
+                                            <TextBlock Text="{Binding Description}" Opacity="0.78" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding DllDisplay}" Margin="0,2,0,0" Opacity="0.62" TextWrapping="Wrap"/>
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Column="2" Text="{Binding AddedDisplay}" FontSize="10" TextAlignment="Center" VerticalAlignment="Top"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button x:Name="AddSelectedWidgetButton" Width="140" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" IsEnabled="False" Click="AddSelectedWidgetButton_Click"/>
+                        <Button x:Name="BrowseWidgetButton" Width="140" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Click="BrowseWidgetButton_Click"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="ProfilesTab">
+                <Grid Margin="18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock x:Name="ProfilesInfoText" TextWrapping="Wrap" Margin="0,4,0,12"/>
+
+                    <ListBox x:Name="ProfilesListBox" Grid.Row="1" MinHeight="180" HorizontalContentAlignment="Stretch" SelectionChanged="ProfilesListBox_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Margin="2,3">
-                                    <TextBlock Text="{Binding Name}"
-                                               FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding Summary}"
-                                               Opacity="0.72"
-                                               Margin="0,2,0,0"
-                                               TextWrapping="Wrap" />
+                                <StackPanel Margin="4,5">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Summary}" Opacity="0.72" Margin="0,2,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
 
-                    <WrapPanel Grid.Row="2"
-                               Margin="0,12,0,0">
-                        <Button Content="New"
-                                Width="95"
-                                Margin="0,0,8,8"
-                                Click="NewProfileButton_Click" />
-                        <Button Content="Save current"
-                                Width="110"
-                                Margin="0,0,8,8"
-                                Click="SaveProfileButton_Click" />
-                        <Button Content="Rename"
-                                Width="95"
-                                Margin="0,0,8,8"
-                                Click="RenameProfileButton_Click" />
-                        <Button Content="Delete"
-                                Width="95"
-                                Margin="0,0,8,8"
-                                Click="DeleteProfileButton_Click" />
+                    <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+                        <Button x:Name="NewProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="NewProfileButton_Click"/>
+                        <Button x:Name="SaveProfileButton" Width="110" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="SaveProfileButton_Click"/>
+                        <Button x:Name="RenameProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="RenameProfileButton_Click"/>
+                        <Button x:Name="DeleteProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="DeleteProfileButton_Click"/>
                     </WrapPanel>
 
-                    <StackPanel Grid.Row="3"
-                                Orientation="Horizontal"
-                                HorizontalAlignment="Right"
-                                Margin="0,8,0,0">
-                        <Button x:Name="CancelProfilePreviewButton"
-                                Content="Cancel preview"
-                                Width="120"
-                                Margin="0,0,8,0"
-                                IsEnabled="False"
-                                Click="CancelProfilePreviewButton_Click" />
-                        <Button x:Name="ApplyProfileButton"
-                                Content="Apply"
-                                Width="100"
-                                IsEnabled="False"
-                                Click="ApplyProfileButton_Click" />
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button x:Name="CancelProfilePreviewButton" Width="120" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" IsEnabled="False" Click="CancelProfilePreviewButton_Click"/>
+                        <Button x:Name="ApplyProfileButton" Width="100" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" IsEnabled="False" Click="ApplyProfileButton_Click"/>
                     </StackPanel>
                 </Grid>
             </TabItem>
 
-            <TabItem x:Name="AdvancedTab" Header="Advanced">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <TabItem x:Name="AdvancedTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="18">
-                        <CheckBox x:Name="DebugLoggingCheckBox"
-                                  Content="Enable debug logging"
-                                  Margin="0,0,0,12"
-                                  Checked="DebugLoggingCheckBox_Changed"
-                                  Unchecked="DebugLoggingCheckBox_Changed" />
+                        <CheckBox x:Name="DebugLoggingCheckBox" Margin="0,4,0,12" Checked="DebugLoggingCheckBox_Changed" Unchecked="DebugLoggingCheckBox_Changed"/>
 
-                        <Grid Margin="0,0,0,10">
+                        <Grid Margin="0,4,0,8">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="60" />
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Text="Max size"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,12,0" />
+                            <TextBlock x:Name="DebugLogMaxSizeLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
 
-                            <Slider x:Name="DebugLogMaxSizeSlider"
-                                    Grid.Column="1"
-                                    Minimum="1"
-                                    Maximum="10"
-                                    TickFrequency="1"
-                                    IsSnapToTickEnabled="True"
-                                    ValueChanged="DebugLogMaxSizeSlider_ValueChanged"
-                                    Margin="0,0,12,0" />
-
-                            <TextBlock x:Name="DebugLogMaxSizeText"
-                                       Grid.Column="2"
-                                       VerticalAlignment="Center"
-                                       TextAlignment="Right"
-                                       Text="10 MB" />
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="DebugLogMaxSizeSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="1" Maximum="10" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="DebugLogMaxSizeSlider_ValueChanged"/>
+                                <TextBlock x:Name="DebugLogMaxSizeText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Grid>
 
-                        <TextBlock x:Name="DebugLoggingInfoText"
-                                   Text="Brotli compressed, maximum 10 files"
-                                   Opacity="0.75"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,18" />
+                        <TextBlock x:Name="DebugLoggingInfoText" Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,18"/>
 
-                        <TextBlock x:Name="ReservedAdvancedLabel"
-                                   Text="Reserved for additional advanced options"
-                                   FontWeight="SemiBold"
-                                   Margin="0,0,0,12" />
-                        <CheckBox Content="Option 15" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 16" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 17" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 18" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 19" IsEnabled="False" Margin="0,4"/>
-                        <CheckBox Content="Option 20" IsEnabled="False" Margin="0,4"/>
-                    </StackPanel>
+                        </StackPanel>
                 </ScrollViewer>
             </TabItem>
+        
         </TabControl>
-
-        <StackPanel Grid.Row="1"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Margin="0,14,0,0">
-            <Button x:Name="CloseButton"
-                    Content="Close"
-                    Width="100"
-                    Padding="10,6"
-                    Click="CloseButton_Click" />
-        </StackPanel>
-    </Grid>
+        <Button x:Name="CloseButton" Grid.Column="1" Grid.Row="1" Width="100" Padding="10,6" Margin="0,14,0,0" HorizontalAlignment="Right" Click="CloseButton_Click"/>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
 </Window>

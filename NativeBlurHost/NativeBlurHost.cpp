@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <d2d1effects.h>
 #include <Windows.Foundation.h>
 #include <Windows.Graphics.Effects.h>
@@ -463,6 +463,10 @@ namespace
                 Root.Children().InsertAtTop(
                     BlurVisual);
 
+                winrt::check_hresult(
+                    SetOpacity(
+                        1.0f));
+
                 return
                     SetBlurAmount(
                         blurAmount);
@@ -496,6 +500,38 @@ namespace
                         blurAmount,
                         0.0f,
                         250.0f));
+
+                return
+                    S_OK;
+            }
+            catch (winrt::hresult_error const& error)
+            {
+                return
+                    error.code();
+            }
+            catch (...)
+            {
+                return
+                    E_FAIL;
+            }
+        }
+
+        HRESULT SetOpacity(
+            float opacity)
+        {
+            try
+            {
+                if (!BlurVisual)
+                {
+                    return
+                        E_POINTER;
+                }
+
+                BlurVisual.Opacity(
+                    std::clamp(
+                        opacity,
+                        0.0f,
+                        1.0f));
 
                 return
                     S_OK;
@@ -588,6 +624,25 @@ extern "C"
                     host)
                 ->SetBlurAmount(
                     blurAmount);
+    }
+
+    __declspec(dllexport)
+    HRESULT __stdcall GlueDockBlur_SetOpacity(
+        void* host,
+        float opacity)
+    {
+        if (host == nullptr)
+        {
+            return
+                E_INVALIDARG;
+        }
+
+        return
+            static_cast<
+                NativeBlurHost*>(
+                    host)
+                ->SetOpacity(
+                    opacity);
     }
 
     __declspec(dllexport)

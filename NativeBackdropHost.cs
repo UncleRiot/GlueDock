@@ -20,6 +20,9 @@ public sealed class NativeBackdropHost : IDisposable
 
     private const int SwHide = 0;
 
+    private const uint WmNcHitTest = 0x0084;
+    private static readonly nint HtTransparent = new(-1);
+
     private const int ENotImpl =
         unchecked((int)0x80004001);
 
@@ -48,6 +51,7 @@ public sealed class NativeBackdropHost : IDisposable
     private nint _nativeBlurHost;
 
     private double _blurPercent;
+    private double _opacity = 1;
     private bool _disposed;
 
     public NativeBackdropHost(
@@ -69,6 +73,24 @@ public sealed class NativeBackdropHost : IDisposable
 
         _owner.Closed +=
             Owner_Closed;
+    }
+
+    public bool SetOpacity(
+        double opacity)
+    {
+        _opacity =
+            Math.Clamp(
+                opacity,
+                0,
+                1);
+
+        if (_nativeBlurHost == 0)
+        {
+            return true;
+        }
+
+        return
+            UpdateOpacity();
     }
 
     public bool SetBlur(
@@ -116,6 +138,10 @@ public sealed class NativeBackdropHost : IDisposable
             return false;
         }
 
+        DebugLog.Write(
+            "Backdrop",
+            $"Native backdrop active; OwnerHandle=0x{_ownerHandle:X}; BackdropHandle=0x{_backdropHandle:X}; NativeBlurHost=0x{_nativeBlurHost:X}; BlurPercent={_blurPercent:0.##}; NativeBlurAmount={GetBlurAmount():0.###}; OwnerVisible={_owner.IsVisible}");
+
         Sync();
 
         return true;
@@ -158,15 +184,20 @@ public sealed class NativeBackdropHost : IDisposable
                 rect.Bottom -
                 rect.Top);
 
-        SetWindowPos(
-            _backdropHandle,
-            new nint(-2),
-            rect.Left,
-            rect.Top,
-            width,
-            height,
-            SwpNoActivate |
-            SwpShowWindow);
+        bool positioned =
+            SetWindowPos(
+                _backdropHandle,
+                _ownerHandle,
+                rect.Left,
+                rect.Top,
+                width,
+                height,
+                SwpNoActivate |
+                SwpShowWindow);
+
+        DebugLog.Write(
+            "BackdropSync",
+            $"OwnerRect=({rect.Left},{rect.Top},{rect.Right},{rect.Bottom}); Size={width}x{height}; OwnerActual=({_owner.ActualWidth:0.###},{_owner.ActualHeight:0.###}); Backdrop=0x{_backdropHandle:X}; Positioned={positioned}; OwnerVisible={_owner.IsVisible}");
     }
 
     public void Dispose()
@@ -310,6 +341,12 @@ public sealed class NativeBackdropHost : IDisposable
 
             if (_nativeBlurHost != 0)
             {
+                if (!UpdateOpacity())
+                {
+                    DisposeNativeBlurHost();
+                    return false;
+                }
+
                 return true;
             }
 
@@ -352,6 +389,41 @@ public sealed class NativeBackdropHost : IDisposable
             DebugLog.Write(
                 "Backdrop",
                 $"Native blur amount update failed; HRESULT=0x{hresult:X8}");
+
+            return false;
+        }
+        catch (Exception exception)
+        {
+            DebugLog.WriteException(
+                "Backdrop",
+                exception);
+
+            return false;
+        }
+    }
+
+    private bool UpdateOpacity()
+    {
+        if (_nativeBlurHost == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            int hresult =
+                NativeSetOpacity(
+                    _nativeBlurHost,
+                    (float)_opacity);
+
+            if (hresult >= 0)
+            {
+                return true;
+            }
+
+            DebugLog.Write(
+                "Backdrop",
+                $"Native backdrop opacity update failed; HRESULT=0x{hresult:X8}; Opacity={_opacity:0.00}");
 
             return false;
         }
@@ -610,6 +682,31 @@ public sealed class NativeBackdropHost : IDisposable
             ENotImpl;
     }
 
+    private static int NativeSetOpacity(
+        nint host,
+        float opacity)
+    {
+        if (Environment.Is64BitProcess)
+        {
+            return
+                NativeSetOpacityX64(
+                    host,
+                    opacity);
+        }
+
+        if (RuntimeInformation.ProcessArchitecture ==
+            Architecture.X86)
+        {
+            return
+                NativeSetOpacityX86(
+                    host,
+                    opacity);
+        }
+
+        return
+            ENotImpl;
+    }
+
     private static void NativeDestroy(
         nint host)
     {
@@ -635,6 +732,12 @@ public sealed class NativeBackdropHost : IDisposable
         nint wParam,
         nint lParam)
     {
+        if (message ==
+            WmNcHitTest)
+        {
+            return HtTransparent;
+        }
+
         return
             DefWindowProc(
                 hwnd,
@@ -731,6 +834,14 @@ public sealed class NativeBackdropHost : IDisposable
 
     [DllImport(
         NativeBlurLibraryX64,
+        EntryPoint = "GlueDockBlur_SetOpacity",
+        CallingConvention = CallingConvention.StdCall)]
+    private static extern int NativeSetOpacityX64(
+        nint host,
+        float opacity);
+
+    [DllImport(
+        NativeBlurLibraryX64,
         EntryPoint = "GlueDockBlur_Destroy",
         CallingConvention = CallingConvention.StdCall)]
     private static extern void NativeDestroyX64(
@@ -752,6 +863,14 @@ public sealed class NativeBackdropHost : IDisposable
     private static extern int NativeSetBlurAmountX86(
         nint host,
         float blurAmount);
+
+    [DllImport(
+        NativeBlurLibraryX86,
+        EntryPoint = "GlueDockBlur_SetOpacity",
+        CallingConvention = CallingConvention.StdCall)]
+    private static extern int NativeSetOpacityX86(
+        nint host,
+        float opacity);
 
     [DllImport(
         NativeBlurLibraryX86,

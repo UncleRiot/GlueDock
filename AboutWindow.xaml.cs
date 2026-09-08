@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Media.Imaging;
@@ -85,16 +85,19 @@ public partial class AboutWindow : Window
         System.Windows.Media.ImageBrush imageBrush,
         string fileName)
     {
-        string path =
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "Resources",
-                fileName);
+        System.Windows.Resources.StreamResourceInfo? resource =
+            System.Windows.Application.GetResourceStream(
+                new Uri(
+                    $"Resources/{fileName}",
+                    UriKind.Relative));
 
-        if (!File.Exists(path))
+        if (resource is null)
         {
             return;
         }
+
+        using Stream stream =
+            resource.Stream;
 
         BitmapImage bitmap =
             new();
@@ -102,10 +105,8 @@ public partial class AboutWindow : Window
         bitmap.BeginInit();
         bitmap.CacheOption =
             BitmapCacheOption.OnLoad;
-        bitmap.UriSource =
-            new Uri(
-                path,
-                UriKind.Absolute);
+        bitmap.StreamSource =
+            stream;
         bitmap.EndInit();
         bitmap.Freeze();
 
@@ -117,16 +118,19 @@ public partial class AboutWindow : Window
         System.Windows.Controls.Image image,
         string fileName)
     {
-        string path =
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "Resources",
-                fileName);
+        System.Windows.Resources.StreamResourceInfo? resource =
+            System.Windows.Application.GetResourceStream(
+                new Uri(
+                    $"Resources/{fileName}",
+                    UriKind.Relative));
 
-        if (!File.Exists(path))
+        if (resource is null)
         {
             return;
         }
+
+        using Stream stream =
+            resource.Stream;
 
         BitmapImage bitmap =
             new();
@@ -134,10 +138,8 @@ public partial class AboutWindow : Window
         bitmap.BeginInit();
         bitmap.CacheOption =
             BitmapCacheOption.OnLoad;
-        bitmap.UriSource =
-            new Uri(
-                path,
-                UriKind.Absolute);
+        bitmap.StreamSource =
+            stream;
         bitmap.EndInit();
         bitmap.Freeze();
 

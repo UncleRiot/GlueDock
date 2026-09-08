@@ -1,0 +1,510 @@
+<api:DockSettingsSectionControl x:Class="GlueDock.ClockWidget.ClockWidgetSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:api="clr-namespace:GlueDock;assembly=GlueDock.WidgetApi"
+        Title="Clock widget settings"
+        Width="540"
+        MinWidth="500"
+        MaxHeight="900"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent">
+    <Border x:Name="WindowBorder"
+            Margin="0"
+            Padding="0"
+            BorderThickness="1"
+            CornerRadius="18"
+            PreviewMouseLeftButtonDown="WindowChrome_PreviewMouseLeftButtonDown">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="GlassSurfaceBorder"
+                    Grid.RowSpan="2"
+                    Background="Transparent"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed" />
+
+            <Border x:Name="GlassHighlightBorder"
+                    Grid.RowSpan="2"
+                    Background="Transparent"
+                    BorderBrush="Transparent"
+                    BorderThickness="0"
+                    IsHitTestVisible="False"
+                    Visibility="Collapsed" />
+
+            <Grid Grid.Row="0"
+                  Margin="14,10,10,0"
+                  Background="Transparent">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Text="Clock widget settings"
+                           VerticalAlignment="Center"
+                           FontSize="16"
+                           FontWeight="SemiBold" />
+
+                <Button Grid.Column="1"
+                        Content="×"
+                        Width="32"
+                        Height="30"
+                        Padding="0"
+                        FontSize="18"
+                        VerticalAlignment="Center"
+                        Click="CloseButton_Click" />
+            </Grid>
+
+            <ScrollViewer x:Name="SettingsScrollViewer"
+                          Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="Transparent">
+                <StackPanel x:Name="SettingsContentPanel"
+                            Margin="16,8,16,16">
+
+                    <CheckBox x:Name="ShowDateCheckBox"
+                              Content="Show date"
+                              Margin="0,4,0,10"
+                              Checked="ShowDateCheckBox_Changed"
+                              Unchecked="ShowDateCheckBox_Changed" />
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Date format"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="DateFormatComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="220"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="Id"
+                                  SelectionChanged="DateFormatComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Time scale"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Slider x:Name="TimeScaleSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="50"
+                                    Maximum="150"
+                                    TickFrequency="5"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="TimeScaleSlider_ValueChanged" />
+                            <TextBlock x:Name="TimeScaleValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Time Y position"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Button Content="▲"
+                                    Width="34"
+                                    Height="26"
+                                    Margin="0,0,5,0"
+                                    Click="TimeYUpButton_Click" />
+                            <Button Content="▼"
+                                    Width="34"
+                                    Height="26"
+                                    Margin="0,0,8,0"
+                                    Click="TimeYDownButton_Click" />
+                            <TextBlock x:Name="TimeYOffsetValueText"
+                                       Width="64"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Date scale"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Slider x:Name="DateScaleSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="50"
+                                    Maximum="150"
+                                    TickFrequency="5"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="DateScaleSlider_ValueChanged" />
+                            <TextBlock x:Name="DateScaleValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Date Y position"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Button Content="▲"
+                                    Width="34"
+                                    Height="26"
+                                    Margin="0,0,5,0"
+                                    Click="DateYUpButton_Click" />
+                            <Button Content="▼"
+                                    Width="34"
+                                    Height="26"
+                                    Margin="0,0,8,0"
+                                    Click="DateYDownButton_Click" />
+                            <TextBlock x:Name="DateYOffsetValueText"
+                                       Width="64"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Clock color"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Border x:Name="ClockColorPreview"
+                                    Width="38"
+                                    Height="24"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center" />
+                            <Button x:Name="ClockColorButton"
+                                    Width="112"
+                                    Height="30"
+                                    Margin="10,0,0,0"
+                                    Click="ClockColorButton_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Timer alarm color"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Border x:Name="TimerAlarmColorPreview"
+                                    Width="38"
+                                    Height="24"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center" />
+                            <Button x:Name="TimerAlarmColorButton"
+                                    Width="112"
+                                    Height="30"
+                                    Margin="10,0,0,0"
+                                    Click="TimerAlarmColorButton_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Stopwatch color"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Border x:Name="StopwatchColorPreview"
+                                    Width="38"
+                                    Height="24"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center" />
+                            <Button x:Name="StopwatchColorButton"
+                                    Width="112"
+                                    Height="30"
+                                    Margin="10,0,0,0"
+                                    Click="StopwatchColorButton_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Alarm color"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Border x:Name="AlarmColorPreview"
+                                    Width="38"
+                                    Height="24"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center" />
+                            <Button x:Name="AlarmColorButton"
+                                    Width="112"
+                                    Height="30"
+                                    Margin="10,0,0,0"
+                                    Click="AlarmColorButton_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Calendar / event color"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Border x:Name="CalendarEventColorPreview"
+                                    Width="38"
+                                    Height="24"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center" />
+                            <Button x:Name="CalendarEventColorButton"
+                                    Width="112"
+                                    Height="30"
+                                    Margin="10,0,0,0"
+                                    Click="CalendarEventColorButton_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Upcoming events"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Slider x:Name="CalendarUpcomingEventCountSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="1"
+                                    Maximum="4"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="CalendarUpcomingEventCountSlider_ValueChanged" />
+                            <TextBlock x:Name="CalendarUpcomingEventCountValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Show events this many days ahead"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Slider x:Name="CalendarUpcomingDaysSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="1"
+                                    Maximum="30"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="CalendarUpcomingDaysSlider_ValueChanged" />
+                            <TextBlock x:Name="CalendarUpcomingDaysValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Upcoming event font size"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Slider x:Name="CalendarUpcomingFontSizeSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="8"
+                                    Maximum="14"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="CalendarUpcomingFontSizeSlider_ValueChanged" />
+                            <TextBlock x:Name="CalendarUpcomingFontSizeValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Alarm sound"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="AlarmSoundComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="300"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  SelectionChanged="SoundComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8"
+                          Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Timer sound"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="TimerSoundComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="300"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  SelectionChanged="SoundComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <TextBlock x:Name="SoundsFolderText"
+                               TextWrapping="Wrap"
+                               Opacity="0.72"
+                               Margin="0,4,0,12" 
+                               Visibility="Collapsed" />
+
+                    <CheckBox x:Name="CalendarCompanionDoubleWidthCheckBox"
+                              Content="Double-width calendar event preview"
+                              Margin="0,0,0,8"
+                               Visibility="Collapsed"
+                              Checked="CalendarCompanionDoubleWidthCheckBox_Changed"
+                              Unchecked="CalendarCompanionDoubleWidthCheckBox_Changed" />
+
+                    <CheckBox x:Name="DisableDefaultHoverEffectCheckBox"
+                              Content="Disable GlueDock default hover effect"
+                              Margin="0,0,0,14"
+                              Checked="DisableDefaultHoverEffectCheckBox_Changed"
+                              Unchecked="DisableDefaultHoverEffectCheckBox_Changed" />
+
+                    <StackPanel x:Name="DialogButtonsPanel"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                        <Button Content="OK"
+                                Width="90"
+                                Margin="0,0,8,0"
+                                IsDefault="True"
+                                Click="OkButton_Click" />
+                        <Button Content="Cancel"
+                                Width="90"
+                                IsCancel="True" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</api:DockSettingsSectionControl>

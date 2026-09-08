@@ -1,3 +1,7 @@
 <Solution>
   <Project Path="GlueDock.csproj" />
+  <Project Path="GlueDock.WidgetApi\GlueDock.WidgetApi.csproj" />
+  <Project Path="GlueDock.ClockWidget\GlueDock.ClockWidget.csproj" />
+  <Project Path="GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj" />
+  <Project Path="GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj" />
 </Solution>

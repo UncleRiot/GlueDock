@@ -1,0 +1,378 @@
+<api:DockSettingsSectionControl x:Class="GlueDock.DriveUsageWidget.DriveUsageSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:api="clr-namespace:GlueDock;assembly=GlueDock.WidgetApi"
+        Title=""
+        Width="540"
+        MinWidth="500"
+        MaxHeight="900"
+        SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <!-- GlueDock UI rule: This dialog follows the dock-wide DockDialogTheme / DockDialogThemeService reference layout. -->
+    <Border x:Name="WindowBorder"
+            Margin="0"
+            Padding="0"
+            BorderThickness="1"
+            CornerRadius="18"
+            PreviewMouseLeftButtonDown="WindowBorder_PreviewMouseLeftButtonDown">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0"
+                  Margin="14,10,10,0"
+                  Background="Transparent">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText"
+                           VerticalAlignment="Center"
+                           FontSize="16"
+                           FontWeight="SemiBold" />
+
+                <Button x:Name="CloseButton"
+                        Grid.Column="1"
+                        Width="32"
+                        Height="30"
+                        Padding="0"
+                        FontSize="18"
+                        VerticalAlignment="Center"
+                        Click="CloseButton_Click" />
+            </Grid>
+
+            <ScrollViewer x:Name="SettingsScrollViewer"
+                          Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="Transparent">
+                <StackPanel x:Name="SettingsContentPanel"
+                            Margin="16,8,16,16">
+
+                    <StackPanel x:Name="GeneralSettingsPanel">
+
+                    <TextBlock x:Name="SelectDrivesText"
+                               FontWeight="SemiBold"
+                               Margin="0,4,0,10" />
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="Drive1LabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="Drive1ComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="300"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="RootPath"
+                                  SelectionChanged="DriveComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="Drive2LabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="Drive2ComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="300"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="RootPath"
+                                  SelectionChanged="DriveComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="Drive3LabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="Drive3ComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="300"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="RootPath"
+                                  SelectionChanged="DriveComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="Drive4LabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="Drive4ComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="300"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="RootPath"
+                                  SelectionChanged="DriveComboBox_SelectionChanged" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="{x:Static api:DockDialogTheme.SliderColumnWidth}" />
+                            <ColumnDefinition Width="58" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SettingsOpacityLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <Slider x:Name="SettingsOpacitySlider"
+                                Grid.Column="1"
+                                Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                HorizontalAlignment="Left"
+                                Minimum="10"
+                                Maximum="100"
+                                TickFrequency="5"
+                                IsSnapToTickEnabled="True"
+                                ValueChanged="SettingsOpacitySlider_ValueChanged" />
+                        <TextBlock x:Name="SettingsOpacityValueText"
+                                   Grid.Column="2"
+                                   Width="52"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center" />
+                        <CheckBox x:Name="SettingsOpacityUseGeneralCheckBox"
+                                  Grid.Column="3"
+                                  Margin="12,0,0,0"
+                                  VerticalAlignment="Center"
+                                  Checked="SettingsOpacityUseGeneralCheckBox_Changed"
+                                  Unchecked="SettingsOpacityUseGeneralCheckBox_Changed" />
+                    </Grid>
+
+                    <Grid Margin="0,4,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="{x:Static api:DockDialogTheme.SliderColumnWidth}" />
+                            <ColumnDefinition Width="58" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SettingsBlurLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <Slider x:Name="SettingsBlurSlider"
+                                Grid.Column="1"
+                                Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                HorizontalAlignment="Left"
+                                Minimum="0"
+                                Maximum="100"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"
+                                ValueChanged="SettingsBlurSlider_ValueChanged" />
+                        <TextBlock x:Name="SettingsBlurValueText"
+                                   Grid.Column="2"
+                                   Width="52"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center" />
+                        <CheckBox x:Name="SettingsBlurUseGeneralCheckBox"
+                                  Grid.Column="3"
+                                  Margin="12,0,0,0"
+                                  VerticalAlignment="Center"
+                                  Checked="SettingsBlurUseGeneralCheckBox_Changed"
+                                  Unchecked="SettingsBlurUseGeneralCheckBox_Changed" />
+                    </Grid>
+
+                    <TextBlock x:Name="RingAppearanceText"
+                               FontWeight="SemiBold"
+                               Margin="0,6,0,8" />
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="RingColorLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal">
+                            <Border x:Name="RingColorPreview"
+                                    Width="38"
+                                    Height="24"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center" />
+                            <Button x:Name="RingColorButton"
+                                    Width="112"
+                                    Height="30"
+                                    Margin="10,0,0,0"
+                                    Click="RingColorButton_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="RingScaleLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Slider x:Name="RingScaleSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="50"
+                                    Maximum="150"
+                                    TickFrequency="10"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="RingScaleSlider_ValueChanged" />
+                            <TextBlock x:Name="RingScaleValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="RingThicknessLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Slider x:Name="RingThicknessSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="50"
+                                    Maximum="160"
+                                    TickFrequency="10"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="RingThicknessSlider_ValueChanged" />
+                            <TextBlock x:Name="RingThicknessValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="RingFillLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <ComboBox x:Name="RingFillModeComboBox"
+                                  Grid.Column="1"
+                                  Grid.ColumnSpan="2"
+                                  Width="220"
+                                  Height="30"
+                                  HorizontalAlignment="Left"
+                                  SelectionChanged="RingFillModeComboBox_SelectionChanged">
+                            <ComboBoxItem x:Name="UsedRingFillModeItem"
+                                          Tag="Used" />
+                            <ComboBoxItem x:Name="FreeRingFillModeItem"
+                                          Tag="Free" />
+                        </ComboBox>
+                    </Grid>
+
+
+                    <CheckBox x:Name="DisableDefaultHoverEffectCheckBox"
+                              Margin="0,4,0,10"
+                              Checked="DisableDefaultHoverEffectCheckBox_Changed"
+                              Unchecked="DisableDefaultHoverEffectCheckBox_Changed" />
+
+                    <TextBlock x:Name="DefaultInfoText"
+                               TextWrapping="Wrap"
+                               Opacity="0.72"
+                               Margin="0,0,0,14" />
+
+                    </StackPanel>
+
+                    <StackPanel x:Name="CompanionSettingsPanel">
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="135" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="CompanionScaleLabelText"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <StackPanel Grid.Column="1"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Slider x:Name="CompanionScaleSlider"
+                                    Width="{x:Static api:DockDialogTheme.SliderWidth}"
+                                    Minimum="50"
+                                    Maximum="150"
+                                    TickFrequency="10"
+                                    IsSnapToTickEnabled="True"
+                                    ValueChanged="CompanionScaleSlider_ValueChanged" />
+                            <TextBlock x:Name="CompanionScaleValueText"
+                                       Width="58"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Right" />
+                        </StackPanel>
+                    </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="DialogButtonsPanel"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                        <Button x:Name="OkButton"
+                                Width="90"
+                                Margin="0,0,8,0"
+                                IsDefault="True"
+                                Click="OkButton_Click" />
+                        <Button x:Name="CancelButton"
+                                Width="90"
+                                IsCancel="True" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</api:DockSettingsSectionControl>

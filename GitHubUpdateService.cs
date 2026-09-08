@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
@@ -244,6 +244,30 @@ public static class GitHubUpdateService
 
         return
             $"{version.Major}.{version.Minor}.{version.Build}";
+    }
+
+    public static bool IsApplicationVersionNewerThan(
+        string? previousVersionText)
+    {
+        if (!TryParseSemanticVersion(
+                NormalizeVersionText(
+                    GetApplicationVersionText()),
+                out SemanticVersion currentVersion))
+        {
+            return false;
+        }
+
+        if (!TryParseSemanticVersion(
+                NormalizeVersionText(
+                    previousVersionText),
+                out SemanticVersion previousVersion))
+        {
+            return true;
+        }
+
+        return
+            currentVersion.CompareTo(
+                previousVersion) > 0;
     }
 
     private static GitHubUpdateResult CreateFailure(

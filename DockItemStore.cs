@@ -14,7 +14,9 @@ public sealed class DockItemStore
             "Items");
     }
 
-    public string Import(string sourcePath)
+    public string Import(
+        string sourcePath,
+        bool moveSource = false)
     {
         if (!File.Exists(sourcePath) &&
             !Directory.Exists(sourcePath))
@@ -56,6 +58,12 @@ public sealed class DockItemStore
                     sourcePath,
                     destinationPath);
 
+                if (moveSource)
+                {
+                    File.Delete(
+                        sourcePath);
+                }
+
                 return destinationPath;
             }
 
@@ -82,6 +90,13 @@ public sealed class DockItemStore
             CopyDirectory(
                 sourcePath,
                 destinationDirectory);
+
+            if (moveSource)
+            {
+                Directory.Delete(
+                    sourcePath,
+                    recursive: true);
+            }
 
             return destinationDirectory;
         }

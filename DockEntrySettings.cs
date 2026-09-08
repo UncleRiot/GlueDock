@@ -6,6 +6,7 @@ public sealed class DockEntrySettings
     public string DisplayName { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public bool IsSubmenu { get; set; }
+    public bool IsWidgetDragDropLocked { get; set; }
     public string SubmenuIconRepositoryPath { get; set; } = string.Empty;
     public List<DockEntrySettings> Children { get; set; } = [];
 }

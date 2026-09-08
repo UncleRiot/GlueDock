@@ -1,4 +1,4 @@
-﻿<Window x:Class="GlueDock.MainWindow"
+<Window x:Class="GlueDock.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=System.Runtime"
@@ -30,11 +30,19 @@
     </Window.Resources>
 
     <Window.ContextMenu>
-        <ContextMenu>
+        <ContextMenu Opened="RootContextMenu_Opened">
             <MenuItem x:Name="NewSubmenuContextMenuItem"
                       Header="New GlueDock submenu"
                       Click="NewSubmenu_Click" />
             <Separator />
+            <MenuItem x:Name="AlwaysOnTopContextMenuItem"
+                      Header="Always on top"
+                      IsCheckable="True"
+                      Click="AlwaysOnTopContextMenuItem_Click" />
+            <MenuItem x:Name="DisableAutohideContextMenuItem"
+                      Header="Disable autohide"
+                      IsCheckable="True"
+                      Click="DisableAutohideContextMenuItem_Click" />
             <MenuItem x:Name="SettingsContextMenuItem"
                       Header="Settings"
                       Click="OpenSettings_Click" />
@@ -65,6 +73,18 @@
                     IsHitTestVisible="False"
                     Visibility="Collapsed" />
 
+            <Canvas x:Name="DockGlassFlames"
+                    Margin="-10"
+                    IsHitTestVisible="False"
+                    ClipToBounds="True"
+                    Visibility="Collapsed" />
+
+            <Canvas x:Name="DockGlassStars"
+                    Margin="-10"
+                    IsHitTestVisible="False"
+                    ClipToBounds="True"
+                    Visibility="Collapsed" />
+
             <Border x:Name="DockGlassHighlight"
                     Margin="-10"
                     CornerRadius="20"
@@ -73,6 +93,24 @@
                     Visibility="Collapsed" />
 
             <Grid x:Name="DockContentGrid">
+                <Border x:Name="LayoutAdjustmentNotice"
+                        Panel.ZIndex="1000"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Bottom"
+                        Margin="10"
+                        Padding="10,6"
+                        CornerRadius="10"
+                        Background="#CC202020"
+                        BorderBrush="#66FFFFFF"
+                        BorderThickness="1"
+                        Opacity="0"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False">
+                    <TextBlock x:Name="LayoutAdjustmentNoticeText"
+                               Foreground="White"
+                               TextWrapping="Wrap"
+                               MaxWidth="360" />
+                </Border>
             <ItemsControl x:Name="DockItemsControl"
                       ItemsSource="{Binding DockItems}"
                       HorizontalAlignment="Center"
@@ -80,8 +118,8 @@
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
                     <Border x:Name="DockItemBorder"
-                            Width="{DynamicResource DockItemWidth}"
-                            Height="58"
+                            Width="{Binding LayoutWidth}"
+                            Height="{Binding LayoutHeight}"
                             Margin="{DynamicResource DockItemMargin}"
                             ClipToBounds="True"
                             CornerRadius="14"
@@ -90,13 +128,38 @@
                             BorderThickness="1"
                             Cursor="Hand"
                             ToolTip="{Binding DisplayName}"
+                            ToolTipOpening="DockItem_ToolTipOpening"
                             PreviewMouseLeftButtonDown="DockItem_PreviewMouseLeftButtonDown"
                             PreviewMouseMove="DockItem_PreviewMouseMove"
                             PreviewMouseLeftButtonUp="DockItem_PreviewMouseLeftButtonUp"
                             MouseEnter="DockItem_MouseEnter"
                             MouseLeave="DockItem_MouseLeave">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="ContextMenuService.IsEnabled"
+                                        Value="True" />
+                            </Style>
+                        </Border.Style>
                         <Border.ContextMenu>
-                            <ContextMenu>
+                            <ContextMenu Opened="DockItemContextMenu_Opened">
+                                <MenuItem x:Name="CloseWidgetCompanionMenuItem"
+                                          Header="Widget: Close Companion"
+                                          Click="CloseWidgetCompanion_Click"
+                                          Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                    <MenuItem.Style>
+                                        <Style TargetType="MenuItem">
+                                            <Setter Property="Visibility"
+                                                    Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsRuntimeOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                             Value="True">
+                                                    <Setter Property="Visibility"
+                                                            Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </MenuItem.Style>
+                                </MenuItem>
                                 <MenuItem Header="Rename"
                                           Click="RenameDockItem_Click"
                                           Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
@@ -134,11 +197,59 @@
                                         </Style>
                                     </MenuItem.Style>
                                 </MenuItem>
+                                <MenuItem x:Name="StartAsAdministratorMenuItem"
+                                          Header="Start as Administrator"
+                                          Click="StartDockItemAsAdministrator_Click"
+                                          Visibility="Collapsed"
+                                          Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
                                 <Separator />
                                 <MenuItem Header="Remove"
                                           Click="RemoveDockItem_Click"
                                           Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
                                 <Separator />
+                                <MenuItem x:Name="WidgetActionsMenuItem"
+                                          Header="Widget">
+                                    <MenuItem x:Name="WidgetDragDropLockMenuItem"
+                                              IsCheckable="True"
+                                              Click="WidgetDragDropLockMenuItem_Click"
+                                              Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem x:Name="WidgetSettingsMenuItem"
+                                              Header="Settings"
+                                              Click="OpenWidgetSettings_Click"
+                                              Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem x:Name="WidgetAlarmMenuItem"
+                                              Header="Alarm clock"
+                                              Click="OpenWidgetAlarm_Click"
+                                              IsCheckable="True"
+                                              IsChecked="{Binding PlacementTarget.DataContext.IsWidgetAlarmActive, RelativeSource={RelativeSource AncestorType=ContextMenu}, Mode=OneWay}"
+                                              Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem x:Name="WidgetTimerMenuItem"
+                                              Header="Timer"
+                                              Click="OpenWidgetTimer_Click"
+                                              IsCheckable="True"
+                                              IsChecked="{Binding PlacementTarget.DataContext.IsWidgetTimerActive, RelativeSource={RelativeSource AncestorType=ContextMenu}, Mode=OneWay}"
+                                              Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem x:Name="WidgetStopwatchMenuItem"
+                                              Header="Stopwatch"
+                                              Click="OpenWidgetStopwatch_Click"
+                                              IsCheckable="True"
+                                              IsChecked="{Binding PlacementTarget.DataContext.IsWidgetStopwatchActive, RelativeSource={RelativeSource AncestorType=ContextMenu}, Mode=OneWay}"
+                                              Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem x:Name="WidgetCalendarMenuItem"
+                                              Header="Calendar"
+                                              Click="OpenWidgetCalendar_Click"
+                                              IsCheckable="True"
+                                              IsChecked="{Binding PlacementTarget.DataContext.IsWidgetCalendarActive, RelativeSource={RelativeSource AncestorType=ContextMenu}, Mode=OneWay}"
+                                              Tag="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                </MenuItem>
+                                <MenuItem x:Name="DockItemAlwaysOnTopMenuItem"
+                                          Header="Always on top"
+                                          IsCheckable="True"
+                                          Click="AlwaysOnTopContextMenuItem_Click" />
+                                <MenuItem x:Name="DockItemDisableAutohideMenuItem"
+                                          Header="Disable autohide"
+                                          IsCheckable="True"
+                                          Click="DisableAutohideContextMenuItem_Click" />
                                 <MenuItem Header="Settings"
                                           Click="OpenSettings_Click" />
                                 <MenuItem Header="About"
@@ -167,13 +278,22 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <Image Source="{Binding Icon}"
-                                   Width="40"
-                                   Height="40"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Stretch="Uniform"
-                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                                <Image x:Name="DockItemIcon"
+                                       Source="{Binding Icon}"
+                                       Width="40"
+                                       Height="40"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Stretch="Uniform"
+                                       RenderOptions.BitmapScalingMode="HighQuality" />
+
+                                <ContentPresenter x:Name="DockItemWidgetHost"
+                                                  Grid.RowSpan="2"
+                                                  Content="{Binding WidgetView}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  TextElement.Foreground="{DynamicResource DockTextBrush}"
+                                                  Visibility="Collapsed" />
 
                                 <TextBlock x:Name="DockItemLabel"
                                            Grid.Row="1"
@@ -188,6 +308,17 @@
                             </Grid>
                         </Grid>
                     </Border>
+                    <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsWidget}"
+                                     Value="True">
+                            <Setter TargetName="DockItemIcon"
+                                    Property="Visibility"
+                                    Value="Collapsed" />
+                            <Setter TargetName="DockItemWidgetHost"
+                                    Property="Visibility"
+                                    Value="Visible" />
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
             </ItemsControl>

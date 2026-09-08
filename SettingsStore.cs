@@ -25,7 +25,7 @@ public sealed class SettingsStore
         {
             if (!File.Exists(_settingsFile))
             {
-                return new DockSettings();
+                return CreateFirstRunSettings();
             }
 
             string json = File.ReadAllText(_settingsFile);
@@ -37,6 +37,29 @@ public sealed class SettingsStore
         {
             return new DockSettings();
         }
+    }
+
+    private static DockSettings CreateFirstRunSettings()
+    {
+        return new DockSettings
+        {
+            Edge =
+                DockEdge.Top,
+            EdgePositionRatio =
+                0.5,
+            CollapseDisabled =
+                true,
+            DockItems =
+            [
+                new DockEntrySettings
+                {
+                    DisplayName =
+                        "GlueDock",
+                    IsSubmenu =
+                        true
+                }
+            ]
+        };
     }
 
     public void Save(DockSettings settings)

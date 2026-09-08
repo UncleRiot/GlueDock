@@ -1,0 +1,80 @@
+﻿<Window x:Class="GlueDock.ClockWidget.ClockWidgetSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Clock widget settings"
+        Width="430"
+        Height="390"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <CheckBox x:Name="ShowDateCheckBox"
+                  Content="Show date"
+                  Margin="0,0,0,16"
+                  Checked="ShowDateCheckBox_Changed"
+                  Unchecked="ShowDateCheckBox_Changed" />
+
+        <StackPanel Grid.Row="1"
+                    Margin="0,0,0,16">
+            <TextBlock Text="Date format"
+                       Margin="0,0,0,6" />
+            <ComboBox x:Name="DateFormatComboBox"
+                      Width="260"
+                      HorizontalAlignment="Left"
+                      DisplayMemberPath="DisplayName"
+                      SelectedValuePath="Id" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2"
+                    Margin="0,0,0,14">
+            <TextBlock Text="Alarm sound"
+                       Margin="0,0,0,6" />
+            <ComboBox x:Name="AlarmSoundComboBox"
+                      Width="360"
+                      HorizontalAlignment="Left" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="3"
+                    Margin="0,0,0,14">
+            <TextBlock Text="Timer sound"
+                       Margin="0,0,0,6" />
+            <ComboBox x:Name="TimerSoundComboBox"
+                      Width="360"
+                      HorizontalAlignment="Left" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="4"
+                   x:Name="SoundsFolderText"
+                   TextWrapping="Wrap"
+                   Opacity="0.72"
+                   Margin="0,0,0,16" />
+
+        <CheckBox x:Name="DisableDefaultHoverEffectCheckBox"
+                  Grid.Row="5"
+                  Content="Disable GlueDock default hover effect"
+                  VerticalAlignment="Top" />
+
+        <StackPanel Grid.Row="6"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button Content="OK"
+                    Width="90"
+                    Margin="0,0,8,0"
+                    IsDefault="True"
+                    Click="OkButton_Click" />
+            <Button Content="Cancel"
+                    Width="90"
+                    IsCancel="True" />
+        </StackPanel>
+    </Grid>
+</Window>

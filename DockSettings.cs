@@ -1,4 +1,4 @@
-﻿namespace GlueDock;
+namespace GlueDock;
 
 public sealed class DockSettings
 {
@@ -8,15 +8,37 @@ public sealed class DockSettings
 
     public bool StartWithWindows { get; set; }
 
+    public bool AlwaysOnTop { get; set; } = true;
+
     public int CollapseDelayMilliseconds { get; set; } = 450;
 
     public int SubdockCollapseDelayMilliseconds { get; set; } = 180;
+
+    public bool SubdockOpenOnClickOnly { get; set; }
 
     public bool CollapseDisabled { get; set; }
 
     public string BarColor { get; set; } = "#12161C";
 
+    public double CollapsedBarOpacity { get; set; } = 0.45;
+
     public string ThemeName { get; set; } = "Default";
+
+    public const string SubDockThemeModeInheritFull = "InheritFull";
+
+    public const string SubDockThemeModeInheritAppearance = "InheritAppearance";
+
+    public const string SubDockThemeModeOverride = "Override";
+
+    public string SubDockThemeMode { get; set; } = SubDockThemeModeInheritFull;
+
+    public string SubDockThemeName { get; set; } = "Default";
+
+    public double? SubDockScale { get; set; }
+
+    public double? SubDockItemSpacing { get; set; }
+
+    public double? SubDockThicknessScale { get; set; }
 
     public bool DockBorderEnabled { get; set; } = true;
 
@@ -28,13 +50,49 @@ public sealed class DockSettings
 
     public double ItemSpacing { get; set; } = 6.0;
 
+    public int RootMaxColumns { get; set; } = 50;
+
+    public int RootMaxRows { get; set; } = 1;
+
+    public int SubDockMaxColumns { get; set; } = 50;
+
+    public int SubDockMaxRows { get; set; } = 1;
+
     public double DockThicknessScale { get; set; } = 1.0;
 
     public bool ShowItemLabels { get; set; } = false;
 
+    public bool ShowRootDockTooltips { get; set; } = true;
+
+    public bool ShowSubDockTooltips { get; set; } = false;
+
     public bool ShowFilePreviews { get; set; } = true;
 
-    public bool UseSmallShortcutOverlay { get; set; }
+    public const string ShortcutOverlayDefault = "Default";
+
+    public const string ShortcutOverlaySmall = "Small";
+
+    public const string ShortcutOverlayNone = "None";
+
+    public string ShortcutOverlayMode { get; set; } = ShortcutOverlayDefault;
+
+    public bool UseSmallShortcutOverlay
+    {
+        get =>
+            string.Equals(
+                ShortcutOverlayMode,
+                ShortcutOverlaySmall,
+                StringComparison.OrdinalIgnoreCase);
+
+        set
+        {
+            if (value)
+            {
+                ShortcutOverlayMode =
+                    ShortcutOverlaySmall;
+            }
+        }
+    }
 
     public string SubmenuIconMode { get; set; } = "Default";
 
@@ -48,6 +106,8 @@ public sealed class DockSettings
 
     public double Opacity { get; set; } = 0.45;
 
+    public double SettingsDialogOpacity { get; set; } = 0.85;
+
     public double BlurRadius { get; set; } = 45;
 
     public string AnimationStyle { get; set; } = "Fade";
@@ -55,6 +115,8 @@ public sealed class DockSettings
     public string HoverEffect { get; set; } = "None";
 
     public string LanguageCode { get; set; } = "EN";
+
+    public string LastLicenseNoticeVersion { get; set; } = string.Empty;
 
     public bool DebugLoggingEnabled { get; set; }
 

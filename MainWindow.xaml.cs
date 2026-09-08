@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -8,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using WinForms = System.Windows.Forms;
 using Drawing = System.Drawing;
@@ -44,6 +46,7 @@ public partial class MainWindow : Window
     private const int WsExToolWindow = 0x00000080;
 
     private static readonly nint HwndTopmost = new(-1);
+    private static readonly nint HwndNotTopmost = new(-2);
 
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
@@ -74,6 +77,9 @@ public partial class MainWindow : Window
     private Point _itemMouseDownPoint;
     private DockItem? _itemMouseDownItem;
     private DockItem? _activeInternalDragItem;
+    private DockItem? _externalDropPlaceholder;
+    private DockItem? _externalDropSubmenuTarget;
+    private Border? _externalDropSubmenuHighlightBorder;
     private Point _dragPointerOffset;
     private int _lastInternalDragIndex = -1;
     private SettingsWindow? _settingsWindow;
@@ -89,10 +95,47 @@ public partial class MainWindow : Window
     private bool _closingSubDockForRootCollapse;
     private WinForms.NotifyIcon? _notifyIcon;
     private bool _collapseAnimationRunning;
+    private bool _syncBackdropOpacityWithDockChrome;
+    private bool _slideExpandPreparing;
+    private string _backdropOpacitySyncPhase = string.Empty;
+    private int _backdropOpacitySyncFrame;
     private bool _initialBackdropReady;
     private bool _isSettingsPreviewApply;
     private Orientation? _itemsOrientation;
+    private double _itemsPanelItemWidth = double.NaN;
+    private int _itemsPanelMaxColumns = -1;
     private readonly DispatcherTimer _zoomHoverUnlockTimer;
+    private readonly DispatcherTimer _expandHoverStabilizeTimer;
+    private readonly Dictionary<IGlueDockWidget, DockItem> _widgetSourceItems =
+        new();
+    private readonly Dictionary<IGlueDockWidget, DockItem> _widgetCompanionItems =
+        new();
+    private DispatcherTimer? _glassGradientDebugTimer;
+    private Stopwatch? _glassGradientDebugStopwatch;
+    private LinearGradientBrush? _glassGradientDebugBrush;
+    private long _glassGradientDebugLastElapsedMilliseconds;
+    private double? _glassGradientDebugLastAngleDegrees;
+    private double? _glassGradientDebugLastVisualAngleDegrees;
+    private double _glassGradientDebugDurationMilliseconds;
+    private double[] _glassGradientDebugKeyFrameProgresses = [];
+    private int _glassGradientDebugSequence;
+    private long _glassGradientDebugLastRenderElapsedMilliseconds;
+    private double? _glassGradientDebugLastRenderVisualAngleDegrees;
+    private int _glassGradientDebugRenderFrameIndex;
+    private string? _glassGradientAnimationSignature;
+    private string? _glassFlameAnimationSignature;
+    private string? _glassStarAnimationSignature;
+    private bool _naturalFireRenderingActive;
+    private WriteableBitmap? _naturalFireBitmap;
+    private byte[]? _naturalFireHeat;
+    private byte[]? _naturalFireNextHeat;
+    private int[]? _naturalFirePixels;
+    private int[]? _naturalFirePalette;
+    private int _naturalFireGridWidth;
+    private int _naturalFireGridHeight;
+    private int _naturalFireFrameIndex;
+    private DateTime _naturalFireLastFrameUtc;
+    private DateTime _naturalFireLastDebugUtc;
 
     public ObservableCollection<DockItem> DockItems { get; } = [];
 
@@ -116,7 +159,16 @@ public partial class MainWindow : Window
                 MainWindow_ContextMenuClosing),
             true);
 
+        AddHandler(
+            ToolTipService.ToolTipOpeningEvent,
+            new ToolTipEventHandler(
+                MainWindow_ToolTipOpening),
+            true);
+
         DataContext = this;
+
+        DockItems.CollectionChanged +=
+            DockItems_CollectionChanged;
 
         _collapseTimer = new DispatcherTimer();
         _collapseTimer.Tick += CollapseTimer_Tick;
@@ -127,8 +179,24 @@ public partial class MainWindow : Window
         };
         _zoomHoverUnlockTimer.Tick += ZoomHoverUnlockTimer_Tick;
 
+        _expandHoverStabilizeTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _expandHoverStabilizeTimer.Tick += ExpandHoverStabilizeTimer_Tick;
+
         SourceInitialized += MainWindow_SourceInitialized;
         Loaded += MainWindow_Loaded;
+        ContentRendered += MainWindow_ContentRendered;
+
+        DockGlassFlames.SizeChanged +=
+            DockGlassFlames_SizeChanged;
+
+        if (FindName("DockGlassStars") is Canvas dockGlassStars)
+        {
+            dockGlassStars.SizeChanged +=
+                DockGlassStars_SizeChanged;
+        }
 
         MouseEnter += MainWindow_MouseEnter;
         MouseLeave += MainWindow_MouseLeave;
@@ -140,6 +208,381 @@ public partial class MainWindow : Window
         DragLeave += MainWindow_DragLeave;
         Drop += MainWindow_Drop;
         Closed += MainWindow_Closed;
+    }
+
+    private void DockItems_CollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        List<DockItem> addedItems =
+            e.NewItems?
+                .OfType<DockItem>()
+                .Where(
+                    item =>
+                        !item.IsRuntimeOnly)
+                .ToList() ??
+            new List<DockItem>();
+
+        List<DockItem> removedItems =
+            e.OldItems?
+                .OfType<DockItem>()
+                .Where(
+                    item =>
+                        !item.IsRuntimeOnly)
+                .ToList() ??
+            new List<DockItem>();
+
+        if (addedItems.Count == 0 &&
+            removedItems.Count == 0)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                foreach (DockItem item in removedItems)
+                {
+                    DetachWidgetCompanion(
+                        item);
+                }
+
+                foreach (DockItem item in addedItems)
+                {
+                    if (DockItems.Contains(
+                            item))
+                    {
+                        AttachWidgetCompanion(
+                            item);
+                    }
+                }
+            },
+            DispatcherPriority.Background);
+    }
+
+    private void AttachWidgetCompanion(
+        DockItem item)
+    {
+        IGlueDockWidget? widget =
+            item.WidgetInstance;
+
+        if (widget is null ||
+            _widgetSourceItems.ContainsKey(
+                widget))
+        {
+            return;
+        }
+
+        _widgetSourceItems[widget] =
+            item;
+
+        widget.CompanionViewChanged +=
+            Widget_CompanionViewChanged;
+
+        UpdateWidgetCompanion(
+            widget);
+    }
+
+    private void DetachWidgetCompanion(
+        DockItem item)
+    {
+        IGlueDockWidget? widget =
+            item.WidgetInstance;
+
+        if (widget is null ||
+            !_widgetSourceItems.Remove(
+                widget))
+        {
+            return;
+        }
+
+        widget.CompanionViewChanged -=
+            Widget_CompanionViewChanged;
+
+        if (widget.ShowCompanionAsSubDock &&
+            ReferenceEquals(
+                _openSubDock?.Tag,
+                item))
+        {
+            _openSubDock?.Close();
+            widget.CloseCompanion();
+        }
+
+        if (_widgetCompanionItems.Remove(
+                widget,
+                out DockItem? companion))
+        {
+            DockItems.Remove(
+                companion);
+        }
+    }
+
+    private void Widget_CompanionViewChanged(
+        object? sender,
+        EventArgs e)
+    {
+        if (sender is not IGlueDockWidget widget)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+                UpdateWidgetCompanion(
+                    widget),
+            DispatcherPriority.Background);
+    }
+
+    private void UpdateWidgetCompanion(
+        IGlueDockWidget widget)
+    {
+        if (!_widgetSourceItems.TryGetValue(
+                widget,
+                out DockItem? sourceItem))
+        {
+            return;
+        }
+
+        sourceItem.NotifyWidgetStateChanged();
+
+        if (widget.ShowCompanionAsSubDock)
+        {
+            UpdateWidgetSubDockCompanion(
+                widget,
+                sourceItem);
+
+            return;
+        }
+
+        bool currentlyVisible =
+            _widgetCompanionItems.TryGetValue(
+                widget,
+                out DockItem? companion);
+
+        if (!widget.HasCompanionView)
+        {
+            if (currentlyVisible &&
+                companion is not null)
+            {
+                _widgetCompanionItems.Remove(
+                    widget);
+
+                DockItems.Remove(
+                    companion);
+
+                UpdateItemsOrientation();
+                UpdateWindowBoundsPreservingHorizontalLeft();
+                UpdateItemLabelVisibility();
+
+                DebugLog.Write(
+                    "Widget",
+                    $"Companion removed; Item={sourceItem.DisplayName}; Id={sourceItem.Id}");
+            }
+
+            return;
+        }
+
+        if (currentlyVisible &&
+            companion is not null)
+        {
+            companion.SlotSpan =
+                Math.Clamp(
+                    widget.CompanionSlotSpan,
+                    1,
+                    4);
+
+            UpdateItemsOrientation();
+            UpdateWindowBoundsPreservingHorizontalLeft();
+            return;
+        }
+
+        FrameworkElement? companionView =
+            widget.CreateCompanionView();
+
+        if (companionView is null)
+        {
+            return;
+        }
+
+        DockItem runtimeItem =
+            new()
+            {
+                DisplayName =
+                    sourceItem.DisplayName +
+                    " timer",
+                IsRuntimeOnly = true,
+                SlotSpan =
+                    Math.Clamp(
+                        widget.CompanionSlotSpan,
+                        1,
+                        4),
+                WidgetView =
+                    companionView
+            };
+
+        _widgetCompanionItems[widget] =
+            runtimeItem;
+
+        int sourceIndex =
+            DockItems.IndexOf(
+                sourceItem);
+
+        if (sourceIndex >= 0)
+        {
+            DockItems.Insert(
+                sourceIndex + 1,
+                runtimeItem);
+        }
+        else
+        {
+            DockItems.Add(
+                runtimeItem);
+        }
+
+        UpdateItemsOrientation();
+        UpdateWindowBoundsPreservingHorizontalLeft();
+        UpdateItemLabelVisibility();
+
+        DebugLog.Write(
+            "Widget",
+            $"Companion added; Item={sourceItem.DisplayName}; Id={sourceItem.Id}; DockItems={DockItems.Count}");
+    }
+
+    private void UpdateWidgetSubDockCompanion(
+        IGlueDockWidget widget,
+        DockItem sourceItem)
+    {
+        if (!widget.HasCompanionView)
+        {
+            if (_openSubDock?.IsVisible == true &&
+                ReferenceEquals(
+                    _openSubDock.Tag,
+                    sourceItem))
+            {
+                _openSubDock.CloseAnimated();
+            }
+
+            return;
+        }
+
+        if (_openSubDock?.IsVisible == true &&
+            ReferenceEquals(
+                _openSubDock.Tag,
+                sourceItem))
+        {
+            _collapseTimer.Stop();
+            return;
+        }
+
+        FrameworkElement? companionView =
+            widget.CreateCompanionView();
+
+        if (companionView is null)
+        {
+            return;
+        }
+
+        FrameworkElement? anchor =
+            sourceItem.WidgetView;
+
+        if (anchor is null ||
+            !anchor.IsVisible)
+        {
+            anchor =
+                DockItemsControl.ItemContainerGenerator.ContainerFromItem(
+                    sourceItem) as FrameworkElement;
+        }
+
+        if (anchor is null)
+        {
+            return;
+        }
+
+        _collapseTimer.Stop();
+        _openSubDock?.Close();
+
+        System.Windows.Rect anchorRect =
+            GetScreenRect(
+                anchor);
+
+        DpiScale anchorDpi =
+            VisualTreeHelper.GetDpi(
+                this);
+
+        SubDockWindow companionWindow =
+            new(
+                companionView,
+                _settings,
+                _dockItemStore,
+                SaveSettings,
+                MoveItemToSubmenu,
+                CanMoveItemToSubmenu,
+                _settings.Edge)
+            {
+                Tag =
+                    sourceItem
+            };
+
+        _openSubDock =
+            companionWindow;
+
+        companionWindow.InteractionStateChanged +=
+            OpenSubDock_InteractionStateChanged;
+
+        companionWindow.ExternalDragEnded +=
+            OpenSubDock_ExternalDragEnded;
+
+        companionWindow.Closed +=
+            (_, _) =>
+            {
+                companionWindow.InteractionStateChanged -=
+                    OpenSubDock_InteractionStateChanged;
+
+                companionWindow.ExternalDragEnded -=
+                    OpenSubDock_ExternalDragEnded;
+
+                if (ReferenceEquals(
+                        _openSubDock,
+                        companionWindow))
+                {
+                    _openSubDock =
+                        null;
+                }
+
+                if (widget.HasCompanionView)
+                {
+                    widget.CloseCompanion();
+                }
+
+                if (!_closingSubDockForRootCollapse &&
+                    !_settings.CollapseDisabled &&
+                    _openContextMenuCount == 0 &&
+                    !IsMouseOver &&
+                    !_collapseTimer.IsEnabled)
+                {
+                    RestartCollapseTimer();
+                }
+            };
+
+        companionWindow.PositionNextTo(
+            anchorRect,
+            anchorDpi);
+
+        companionWindow.Show();
+
+        DebugLog.Write(
+            "Widget",
+            $"Companion subdock shown; Item={sourceItem.DisplayName}; Id={sourceItem.Id}; Left={companionWindow.Left:0.0}; Top={companionWindow.Top:0.0}; Width={companionWindow.Width:0.0}; Height={companionWindow.Height:0.0}");
+    }
+
+    private void UpdateWindowBoundsPreservingHorizontalLeft()
+    {
+        UpdateWindowBounds(
+            preserveHorizontalLeft: true);
+
+        DebugLog.Write(
+            "RootBounds",
+            $"Companion horizontal left preserved; Left={Left:0.0}; Width={Width:0.0}; Edge={_settings.Edge}");
     }
 
     private void MainWindow_SourceInitialized(
@@ -252,12 +695,22 @@ public partial class MainWindow : Window
         StartupManager.SetStartWithWindows(
             _settings.StartWithWindows);
 
+        EnsureDockTopmost();
+
         InitializeTrayIcon();
 
+        EnsureDockTopmost();
         UpdateItemsOrientation();
         ApplyAppearance();
+
+        _settingsWindow?.ApplyAppearance(
+            CreateWidgetAppearance());
+
+        ApplyWidgetAppearance(
+            DockItems);
         UpdateItemLabelVisibility();
         UpdateDockItemPreviews();
+        ApplyRootDockTooltipSetting();
         _openSubDock?.ApplySettingsLive();
 
         if (_settings.CollapseDisabled)
@@ -274,6 +727,26 @@ public partial class MainWindow : Window
             {
                 EnsureDockTopmost();
                 UpdateWindowBounds();
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private void MainWindow_ContentRendered(
+        object? sender,
+        EventArgs e)
+    {
+        ContentRendered -=
+            MainWindow_ContentRendered;
+
+        Dispatcher.BeginInvoke(
+            async () =>
+            {
+                EnsureDockTopmost();
+                UpdateWindowBounds();
+
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(
+                        650));
 
                 _initialBackdropReady = true;
 
@@ -281,8 +754,12 @@ public partial class MainWindow : Window
                     _settings.BlurRadius);
 
                 _nativeBackdropHost.Sync();
+
+                DebugLog.Write(
+                    "Backdrop",
+                    $"Startup blur initialized after compositor settle delay; Blur={_settings.BlurRadius:0.##}; Width={Width:0.0}; Height={Height:0.0}");
             },
-            DispatcherPriority.Loaded);
+            DispatcherPriority.ContextIdle);
     }
 
     private void InitializeTrayIcon()
@@ -293,18 +770,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        string applicationIconPath =
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "Resources",
-                "GlueDock.ico");
-
         Drawing.Icon applicationIcon =
-            System.IO.File.Exists(
-                applicationIconPath)
-                ? new Drawing.Icon(
-                    applicationIconPath)
-                : Drawing.SystemIcons.Application;
+            Drawing.SystemIcons.Application;
+
+        Stream? applicationIconStream =
+            Application.GetResourceStream(
+                new Uri(
+                    "pack://application:,,,/Resources/GlueDock.ico",
+                    UriKind.Absolute))
+                ?.Stream;
+
+        if (applicationIconStream is not null)
+        {
+            using (applicationIconStream)
+            using (Drawing.Icon resourceIcon =
+                   new(
+                       applicationIconStream))
+            {
+                applicationIcon =
+                    (Drawing.Icon)resourceIcon.Clone();
+            }
+        }
 
         _notifyIcon =
             new WinForms.NotifyIcon
@@ -372,6 +858,21 @@ public partial class MainWindow : Window
                     });
             };
 
+        WinForms.ToolStripMenuItem aboutItem =
+            new(App.Language["Context.About"]);
+
+        aboutItem.Click +=
+            (_, _) =>
+            {
+                Dispatcher.Invoke(
+                    () =>
+                    {
+                        About_Click(
+                            this,
+                            new RoutedEventArgs());
+                    });
+            };
+
         WinForms.ToolStripMenuItem exitItem =
             new(App.Language["Context.Exit"]);
 
@@ -387,6 +888,7 @@ public partial class MainWindow : Window
 
         menu.Items.Add(showItem);
         menu.Items.Add(settingsItem);
+        menu.Items.Add(aboutItem);
         menu.Items.Add(
             new WinForms.ToolStripSeparator());
         menu.Items.Add(exitItem);
@@ -417,6 +919,9 @@ public partial class MainWindow : Window
         NewSubmenuContextMenuItem.Header =
             App.Language["Submenu.New"];
 
+        DisableAutohideContextMenuItem.Header =
+            App.Language["Context.DisableAutohide"];
+
         SettingsContextMenuItem.Header =
             App.Language["Context.Settings"];
 
@@ -438,6 +943,19 @@ public partial class MainWindow : Window
         object? sender,
         EventArgs e)
     {
+        DockItems.CollectionChanged -=
+            DockItems_CollectionChanged;
+
+        foreach (IGlueDockWidget widget in
+                 _widgetSourceItems.Keys.ToList())
+        {
+            widget.CompanionViewChanged -=
+                Widget_CompanionViewChanged;
+        }
+
+        _widgetSourceItems.Clear();
+        _widgetCompanionItems.Clear();
+
         App.Language.LanguageChanged -=
             Language_LanguageChanged;
 
@@ -447,6 +965,8 @@ public partial class MainWindow : Window
 
         _openSubDock?.Close();
         _openSubDock = null;
+
+        StopNaturalFireHeatField();
 
         DebugLog.Shutdown();
 
@@ -506,6 +1026,17 @@ public partial class MainWindow : Window
         LogRootState(
             "MouseLeave");
 
+        if (_expandHoverStabilizeTimer.IsEnabled)
+        {
+            _collapseTimer.Stop();
+
+            DebugLog.Write(
+                "Root",
+                "Transient MouseLeave ignored while expand hover stabilizes.");
+
+            return;
+        }
+
         if (_settings.CollapseDisabled ||
             _isWindowDragging ||
             _isExternalDragActive ||
@@ -519,6 +1050,26 @@ public partial class MainWindow : Window
         if (_openSubDock?.IsPointerOverDockChain == true)
         {
             _collapseTimer.Stop();
+            return;
+        }
+
+        RestartCollapseTimer();
+    }
+
+    private void ExpandHoverStabilizeTimer_Tick(
+        object? sender,
+        EventArgs e)
+    {
+        _expandHoverStabilizeTimer.Stop();
+
+        if (_settings.CollapseDisabled ||
+            _isWindowDragging ||
+            _isExternalDragActive ||
+            _activeInternalDragItem is not null ||
+            _openContextMenuCount > 0 ||
+            IsMouseOver ||
+            _openSubDock?.IsPointerOverDockChain == true)
+        {
             return;
         }
 
@@ -832,6 +1383,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private void DockItem_ToolTipOpening(
+        object sender,
+        ToolTipEventArgs e)
+    {
+        if (sender is not FrameworkElement element ||
+            element.DataContext is not DockItem item ||
+            !item.IsRuntimeOnly ||
+            item.WidgetView?.ToolTip is null)
+        {
+            return;
+        }
+
+        element.ToolTip =
+            item.WidgetView.ToolTip;
+    }
+
     private void DockItem_MouseEnter(
         object sender,
         MouseEventArgs e)
@@ -842,11 +1409,26 @@ public partial class MainWindow : Window
             return;
         }
 
-        ApplyDockItemHoverEffect(
-            element);
+        if (item.IsRuntimeOnly &&
+            item.WidgetView?.ToolTip is not null)
+        {
+            element.ToolTip =
+                item.WidgetView.ToolTip;
+        }
+
+        ApplyToolTipSettingToVisualTree(
+            element,
+            _settings.ShowRootDockTooltips);
+
+        if (!item.DisableDefaultHoverEffect)
+        {
+            ApplyDockItemHoverEffect(
+                element);
+        }
 
         if (_isWindowDragging ||
-            !item.IsSubmenu)
+            !item.IsSubmenu ||
+            _settings.SubdockOpenOnClickOnly)
         {
             return;
         }
@@ -879,8 +1461,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        ResetDockItemHoverEffect(
-            element);
+        if (!item.DisableDefaultHoverEffect)
+        {
+            ResetDockItemHoverEffect(
+                element);
+        }
 
         if (!item.IsSubmenu ||
             !ReferenceEquals(
@@ -964,6 +1549,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (item.IsRuntimeOnly)
+        {
+            return;
+        }
+
         _itemMouseDownItem = item;
         _itemMouseDownPoint =
             e.GetPosition(this);
@@ -975,13 +1565,61 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private static void SetShellObjectOffsets(
+        DataObject dragData,
+        FrameworkElement draggedElement)
+    {
+        Point groupOrigin =
+            draggedElement.PointToScreen(
+                new Point(
+                    0,
+                    0));
+
+        byte[] shellObjectOffsets =
+            new byte[16];
+
+        Buffer.BlockCopy(
+            BitConverter.GetBytes(
+                (int)Math.Round(
+                    groupOrigin.X)),
+            0,
+            shellObjectOffsets,
+            0,
+            4);
+
+        Buffer.BlockCopy(
+            BitConverter.GetBytes(
+                (int)Math.Round(
+                    groupOrigin.Y)),
+            0,
+            shellObjectOffsets,
+            4,
+            4);
+
+        dragData.SetData(
+            "Shell Object Offsets",
+            new MemoryStream(
+                shellObjectOffsets));
+    }
+
     private void DockItem_PreviewMouseMove(
         object sender,
         MouseEventArgs e)
     {
+        if (sender is not FrameworkElement draggedElement)
+        {
+            return;
+        }
+
         if (_itemMouseDownItem is null ||
             e.LeftButton !=
             MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        if (_itemMouseDownItem.IsWidget &&
+            _itemMouseDownItem.IsWidgetDragDropLocked)
         {
             return;
         }
@@ -1023,6 +1661,19 @@ public partial class MainWindow : Window
                 {
                     draggedItem.Path
                 });
+
+            SetShellObjectOffsets(
+                dragData,
+                draggedElement);
+
+            dragData.SetData(
+                "Preferred DropEffect",
+                new MemoryStream(
+                    BitConverter.GetBytes(
+                        (int)((Keyboard.Modifiers &
+                               ModifierKeys.Shift) != 0
+                            ? DragDropEffects.Move
+                            : DragDropEffects.Copy))));
         }
 
         _activeInternalDragItem =
@@ -1039,12 +1690,38 @@ public partial class MainWindow : Window
             draggedItem,
             visible: false);
 
+        DragDropEffects completedEffect =
+            DragDropEffects.None;
+
         try
         {
-            DragDrop.DoDragDrop(
-                this,
-                dragData,
-                DragDropEffects.Copy);
+            completedEffect =
+                DragDrop.DoDragDrop(
+                    this,
+                    dragData,
+                    DragDropEffects.Copy |
+                    DragDropEffects.Move);
+
+            if (completedEffect ==
+                    DragDropEffects.Move &&
+                DockItems.Contains(
+                    draggedItem))
+            {
+                DockItems.Remove(
+                    draggedItem);
+
+                _dockItemStore.DeleteManagedItem(
+                    draggedItem.Path);
+
+                SaveSettings();
+                UpdateItemsOrientation();
+                UpdateWindowBounds();
+                UpdateItemLabelVisibility();
+
+                DebugLog.Write(
+                    "RootDrag",
+                    $"Item moved out of root dock; Name={draggedItem.DisplayName}; Path={draggedItem.Path}");
+            }
         }
         finally
         {
@@ -1057,6 +1734,8 @@ public partial class MainWindow : Window
             HideInternalDragGhost();
             _activeInternalDragItem = null;
             _lastInternalDragIndex = -1;
+
+            _openSubDock?.ClearInternalDragPreview();
 
             if (!_settings.CollapseDisabled &&
                 !_isWindowDragging &&
@@ -1076,6 +1755,12 @@ public partial class MainWindow : Window
     {
         if (sender is not FrameworkElement element ||
             element.DataContext is not DockItem item)
+        {
+            _itemMouseDownItem = null;
+            return;
+        }
+
+        if (item.IsRuntimeOnly)
         {
             _itemMouseDownItem = null;
             return;
@@ -1134,7 +1819,7 @@ public partial class MainWindow : Window
                         $"Submenu pinned by click; Name={item.DisplayName}");
                 }
             }
-            else
+            else if (!item.IsWidget)
             {
                 LaunchDockItem(item);
             }
@@ -1147,9 +1832,18 @@ public partial class MainWindow : Window
         object sender,
         DragEventArgs e)
     {
+        StopExternalDragLeaveTimer();
+
         bool externalDrag =
             !e.Data.GetDataPresent(
                 InternalDragFormat);
+
+        if (!externalDrag &&
+            _activeInternalDragItem is not null)
+        {
+            ShowInternalDragGhost(
+                _activeInternalDragItem);
+        }
 
         if (externalDrag)
         {
@@ -1157,6 +1851,11 @@ public partial class MainWindow : Window
 
             if (!_isExternalDragActive)
             {
+                _externalDropSubmenuTarget =
+                    null;
+
+                ClearExternalDropSubmenuHighlight();
+
                 _isExternalDragActive = true;
 
                 DebugLog.Write(
@@ -1205,6 +1904,8 @@ public partial class MainWindow : Window
 
         if (_openSubDock?.IsPointerOverDockChain == true)
         {
+            RemoveExternalDropPlaceholder();
+
             _collapseTimer.Stop();
             return;
         }
@@ -1212,10 +1913,21 @@ public partial class MainWindow : Window
         if (_isExternalDragActive)
         {
             _isExternalDragActive = false;
+            RemoveExternalDropPlaceholder();
+            ClearExternalDropSubmenuHighlight();
 
             DebugLog.Write(
                 "RootDrag",
                 "External drag left root dock after debounce.");
+        }
+        else if (_externalDropPlaceholder is not null)
+        {
+            RemoveExternalDropPlaceholder();
+            ClearExternalDropSubmenuHighlight();
+
+            DebugLog.Write(
+                "RootDrag",
+                "Internal cross-dock drag left root dock after debounce.");
         }
 
         if (!_settings.CollapseDisabled &&
@@ -1226,7 +1938,6 @@ public partial class MainWindow : Window
             RestartCollapseTimer();
         }
     }
-
     private void MainWindow_DragOver(
         object sender,
         DragEventArgs e)
@@ -1243,24 +1954,104 @@ public partial class MainWindow : Window
             UpdateInternalDragVisual(
                 pointerPosition);
 
-            UpdateInternalDragPosition(
-                draggedItem,
-                pointerPosition);
-        }
-        else if (e.Data.GetDataPresent(
-                     DataFormats.FileDrop))
-        {
             FrameworkElement? submenuElement =
-                FindSubmenuElementAtPosition(
-                    e.GetPosition(
-                        DockItemsControl));
+                FindInternalSubmenuDropElementAtPosition(
+                    pointerPosition);
 
-            if (submenuElement?.DataContext is DockItem submenuItem)
+            if (submenuElement?.DataContext is DockItem submenuItem &&
+                CanMoveItemToSubmenu(
+                    draggedItem,
+                    submenuItem))
             {
+                _externalDropSubmenuTarget =
+                    submenuItem;
+
+                SetExternalDropSubmenuHighlight(
+                    submenuElement);
+
                 OpenSubmenu(
                     submenuItem,
                     submenuElement);
             }
+            else
+            {
+                _externalDropSubmenuTarget =
+                    null;
+
+                ClearExternalDropSubmenuHighlight();
+
+                if (DockItems.Contains(
+                        draggedItem))
+                {
+                    UpdateInternalDragPosition(
+                        draggedItem,
+                        pointerPosition);
+                }
+                else
+                {
+                    string[] paths =
+                        string.IsNullOrWhiteSpace(
+                            draggedItem.Path)
+                            ? []
+                            : [draggedItem.Path];
+
+                    UpdateExternalDropPlaceholder(
+                        pointerPosition,
+                        paths);
+                }
+            }
+        }
+        else if (e.Data.GetDataPresent(
+                     DataFormats.FileDrop) &&
+                 e.Data.GetData(
+                     DataFormats.FileDrop) is string[] paths)
+        {
+            Point pointerPosition =
+                e.GetPosition(
+                    DockItemsControl);
+
+            FrameworkElement? submenuElement =
+                FindSubmenuElementAtPosition(
+                    pointerPosition);
+
+            if (submenuElement?.DataContext is DockItem submenuItem)
+            {
+                _externalDropSubmenuTarget =
+                    submenuItem;
+
+                SetExternalDropSubmenuHighlight(
+                    submenuElement);
+
+                OpenSubmenu(
+                    submenuItem,
+                    submenuElement);
+            }
+            else
+            {
+                HitTestResult? hit =
+                    VisualTreeHelper.HitTest(
+                        DockItemsControl,
+                        pointerPosition);
+
+                DockItem? targetItem =
+                    FindDockItem(
+                        hit?.VisualHit);
+
+                if (targetItem is not null &&
+                    !ReferenceEquals(
+                        targetItem,
+                        _externalDropPlaceholder))
+                {
+                    _externalDropSubmenuTarget =
+                        null;
+
+                    ClearExternalDropSubmenuHighlight();
+                }
+            }
+
+            UpdateExternalDropPlaceholder(
+                pointerPosition,
+                paths);
         }
 
         SetDropEffect(e);
@@ -1273,12 +2064,13 @@ public partial class MainWindow : Window
         if (e.Data.GetDataPresent(
                 InternalDragFormat))
         {
+            HideInternalDragGhost();
+            StartExternalDragLeaveTimer();
             return;
         }
 
         StartExternalDragLeaveTimer();
     }
-
     private void MainWindow_Drop(
         object sender,
         DragEventArgs e)
@@ -1288,29 +2080,27 @@ public partial class MainWindow : Window
             if (e.Data.GetDataPresent(
                     InternalDragFormat) &&
                 e.Data.GetData(
-                    InternalDragFormat) is DockItem)
-            {
-                e.Effects =
-                    DragDropEffects.Copy;
-
-                e.Handled = true;
-                return;
-            }
-
-            if (e.Data.GetDataPresent(
-                    DataFormats.FileDrop) &&
-                e.Data.GetData(
-                    DataFormats.FileDrop) is string[] paths)
+                    InternalDragFormat) is DockItem draggedItem)
             {
                 FrameworkElement? submenuElement =
-                    FindSubmenuElementAtPosition(
+                    FindInternalSubmenuDropElementAtPosition(
                         e.GetPosition(
                             DockItemsControl));
 
-                if (submenuElement?.DataContext is DockItem submenuItem)
+                DockItem? submenuItem =
+                    submenuElement?.DataContext as DockItem ??
+                    _externalDropSubmenuTarget;
+
+                if (submenuItem is not null &&
+                    submenuItem.IsSubmenu &&
+                    CanMoveItemToSubmenu(
+                        draggedItem,
+                        submenuItem))
                 {
-                    AddDroppedItemsToSubmenu(
-                        paths,
+                    RemoveExternalDropPlaceholder();
+
+                    MoveItemToSubmenu(
+                        draggedItem,
                         submenuItem);
 
                     if (_openSubDock?.IsVisible == true &&
@@ -1323,16 +2113,115 @@ public partial class MainWindow : Window
 
                     DebugLog.Write(
                         "RootDrag",
-                        $"External drop added directly to submenu; Name={submenuItem.DisplayName}; Items={submenuItem.Children.Count}");
+                        $"Internal item moved directly to submenu; Item={draggedItem.DisplayName}; Submenu={submenuItem.DisplayName}; Items={submenuItem.Children.Count}");
                 }
-                else
+                else if (!DockItems.Contains(
+                             draggedItem))
                 {
-                    AddDroppedItems(
-                        paths);
+                    int insertionIndex =
+                        _externalDropPlaceholder is null
+                            ? DockItems.Count
+                            : Math.Max(
+                                0,
+                                DockItems.IndexOf(
+                                    _externalDropPlaceholder));
+
+                    RemoveExternalDropPlaceholder();
+
+                    if (TryRemoveDockItem(
+                            DockItems,
+                            draggedItem))
+                    {
+                        insertionIndex =
+                            Math.Clamp(
+                                insertionIndex,
+                                0,
+                                DockItems.Count);
+
+                        DockItems.Insert(
+                            insertionIndex,
+                            draggedItem);
+
+                        EnsureRootRowCapacity();
+                        UpdateItemsOrientation();
+                        UpdateWindowBounds();
+                        UpdateItemLabelVisibility();
+
+                        _openSubDock?.RefreshItemsLayout();
+
+                        DebugLog.Write(
+                            "RootDrag",
+                            $"Internal item moved from subdock to root dock; Name={draggedItem.DisplayName}; Index={insertionIndex}");
+                    }
                 }
 
                 e.Effects =
                     DragDropEffects.Copy;
+
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Data.GetDataPresent(
+                    DataFormats.FileDrop) &&
+                e.Data.GetData(
+                    DataFormats.FileDrop) is string[] paths)
+            {
+                bool moveSource =
+                    (e.KeyStates &
+                     DragDropKeyStates.ShiftKey) != 0;
+
+                int insertionIndex =
+                    _externalDropPlaceholder is null
+                        ? DockItems.Count
+                        : Math.Max(
+                            0,
+                            DockItems.IndexOf(
+                                _externalDropPlaceholder));
+
+                FrameworkElement? submenuElement =
+                    FindSubmenuElementAtPosition(
+                        e.GetPosition(
+                            DockItemsControl));
+
+                DockItem? submenuItem =
+                    submenuElement?.DataContext as DockItem ??
+                    _externalDropSubmenuTarget;
+
+                RemoveExternalDropPlaceholder();
+
+                if (submenuItem is not null &&
+                    submenuItem.IsSubmenu)
+                {
+                    AddDroppedItemsToSubmenu(
+                        paths,
+                        submenuItem,
+                        moveSource);
+
+                    if (_openSubDock?.IsVisible == true &&
+                        ReferenceEquals(
+                            _openSubDock.Tag,
+                            submenuItem))
+                    {
+                        _openSubDock.RefreshItemsLayout();
+                    }
+
+                    DebugLog.Write(
+                        "RootDrag",
+                        $"External drop added directly to submenu; Name={submenuItem.DisplayName}; Items={submenuItem.Children.Count}; Move={moveSource}");
+                }
+                else
+                {
+                    AddDroppedItems(
+                        paths,
+                        insertionIndex,
+                        moveSource);
+                }
+
+                e.Effects =
+                    moveSource
+                        ? DragDropEffects.Move
+                        : DragDropEffects.Copy;
 
                 e.Handled = true;
             }
@@ -1340,6 +2229,12 @@ public partial class MainWindow : Window
         finally
         {
             StopExternalDragLeaveTimer();
+            RemoveExternalDropPlaceholder();
+
+            _externalDropSubmenuTarget =
+                null;
+
+            ClearExternalDropSubmenuHighlight();
 
             _isExternalDragActive = false;
 
@@ -1369,6 +2264,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        DetachWidgetCompanion(
+            item);
+
         DockItems.Remove(item);
 
         DeleteManagedContent(item);
@@ -1380,7 +2278,9 @@ public partial class MainWindow : Window
             _openSubDock.Close();
         }
 
+        UpdateItemsOrientation();
         UpdateWindowBounds();
+        UpdateItemLabelVisibility();
         SaveSettings();
 
         _openContextMenuCount = 0;
@@ -1547,6 +2447,8 @@ public partial class MainWindow : Window
         EventArgs e)
     {
         StopExternalDragLeaveTimer();
+        RemoveExternalDropPlaceholder();
+        ClearExternalDropSubmenuHighlight();
 
         if (_isExternalDragActive)
         {
@@ -1827,6 +2729,8 @@ public partial class MainWindow : Window
     private void DeleteManagedContent(
         DockItem item)
     {
+        item.DisposeWidget();
+
         if (item.IsSubmenu)
         {
             foreach (DockItem child in item.Children.ToList())
@@ -1868,6 +2772,260 @@ public partial class MainWindow : Window
             element.ActualHeight);
     }
 
+    private void DockItemContextMenu_Opened(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.ContextMenu contextMenu ||
+            contextMenu.PlacementTarget is not FrameworkElement placementTarget ||
+            placementTarget.DataContext is not DockItem item)
+        {
+            return;
+        }
+
+        if (item.IsRuntimeOnly)
+        {
+            foreach (object menuEntry in contextMenu.Items)
+            {
+                if (menuEntry is MenuItem menuItem)
+                {
+                    menuItem.Visibility =
+                        string.Equals(
+                            menuItem.Name,
+                            "CloseWidgetCompanionMenuItem",
+                            StringComparison.Ordinal) ||
+                        string.Equals(
+                            menuItem.Name,
+                            "DockItemDisableAutohideMenuItem",
+                            StringComparison.Ordinal)
+                            ? Visibility.Visible
+                            : Visibility.Collapsed;
+                }
+                else if (menuEntry is Separator separator)
+                {
+                    separator.Visibility =
+                        Visibility.Collapsed;
+                }
+            }
+
+            if (FindContextMenuItem(
+                    contextMenu.Items,
+                    "DockItemDisableAutohideMenuItem") is MenuItem runtimeDisableAutohideMenuItem)
+            {
+                runtimeDisableAutohideMenuItem.Header =
+                    App.Language["Context.DisableAutohide"];
+
+                runtimeDisableAutohideMenuItem.IsChecked =
+                    _settings.CollapseDisabled;
+            }
+
+            return;
+        }
+
+        item.NotifyWidgetStateChanged();
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "DockItemAlwaysOnTopMenuItem") is MenuItem alwaysOnTopMenuItem)
+        {
+            alwaysOnTopMenuItem.IsChecked =
+                _settings.AlwaysOnTop;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "DockItemDisableAutohideMenuItem") is MenuItem disableAutohideMenuItem)
+        {
+            disableAutohideMenuItem.Header =
+                App.Language["Context.DisableAutohide"];
+
+            disableAutohideMenuItem.IsChecked =
+                _settings.CollapseDisabled;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "StartAsAdministratorMenuItem") is MenuItem startAsAdministratorMenuItem)
+        {
+            startAsAdministratorMenuItem.Visibility =
+                CanStartDockItemAsAdministrator(
+                    item)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetActionsMenuItem") is MenuItem widgetMenuItem)
+        {
+            widgetMenuItem.Header =
+                $"Widget: {item.DisplayName}";
+
+            widgetMenuItem.Visibility =
+                item.IsWidget
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetDragDropLockMenuItem") is MenuItem dragDropLockMenuItem)
+        {
+            dragDropLockMenuItem.Header =
+                App.Language["Context.WidgetDragDropLock"];
+
+            dragDropLockMenuItem.IsChecked =
+                item.IsWidgetDragDropLocked;
+
+            dragDropLockMenuItem.Visibility =
+                item.IsWidget
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetSettingsMenuItem") is MenuItem settingsMenuItem)
+        {
+            settingsMenuItem.Visibility =
+                item.HasWidgetSettings
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetAlarmMenuItem") is MenuItem alarmMenuItem)
+        {
+            alarmMenuItem.Visibility =
+                item.HasWidgetAlarm
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetTimerMenuItem") is MenuItem timerMenuItem)
+        {
+            timerMenuItem.Visibility =
+                item.HasWidgetTimer
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetStopwatchMenuItem") is MenuItem stopwatchMenuItem)
+        {
+            stopwatchMenuItem.Visibility =
+                item.HasWidgetStopwatch
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "WidgetCalendarMenuItem") is MenuItem calendarMenuItem)
+        {
+            calendarMenuItem.Visibility =
+                item.HasWidgetCalendar
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+        }
+    }
+
+    private static MenuItem? FindContextMenuItem(
+        ItemCollection items,
+        string name)
+    {
+        foreach (object entry in items)
+        {
+            if (entry is not MenuItem menuItem)
+            {
+                continue;
+            }
+
+            if (string.Equals(
+                    menuItem.Name,
+                    name,
+                    StringComparison.Ordinal))
+            {
+                return menuItem;
+            }
+
+            MenuItem? nested =
+                FindContextMenuItem(
+                    menuItem.Items,
+                    name);
+
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private void CloseWidgetCompanion_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            !item.IsRuntimeOnly)
+        {
+            return;
+        }
+
+        IGlueDockWidget? widget =
+            _widgetCompanionItems
+                .FirstOrDefault(
+                    entry =>
+                        ReferenceEquals(
+                            entry.Value,
+                            item))
+                .Key;
+
+        if (widget is null)
+        {
+            return;
+        }
+
+        widget.CloseCompanion();
+
+        _widgetCompanionItems.Remove(
+            widget);
+
+        DockItems.Remove(
+            item);
+
+        UpdateItemsOrientation();
+        UpdateWindowBounds();
+        UpdateItemLabelVisibility();
+
+        DebugLog.Write(
+            "Widget",
+            $"Companion closed by user; Item={item.DisplayName}; DockItems={DockItems.Count}");
+    }
+
+    private void MainWindow_ToolTipOpening(
+        object sender,
+        ToolTipEventArgs e)
+    {
+        if (_settings.ShowRootDockTooltips)
+        {
+            return;
+        }
+
+        e.Handled =
+            true;
+
+        DebugLog.Write(
+            "ToolTip",
+            "Suppressed; Scope=Root");
+    }
+
     private void MainWindow_ContextMenuOpening(
         object sender,
         ContextMenuEventArgs e)
@@ -1906,6 +3064,240 @@ public partial class MainWindow : Window
         }
     }
 
+    private void WidgetDragDropLockMenuItem_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            !item.IsWidget)
+        {
+            return;
+        }
+
+        item.IsWidgetDragDropLocked =
+            menuItem.IsChecked;
+
+        SaveSettings();
+
+        DebugLog.Write(
+            "Widget",
+            $"Drag/drop lock changed; Item={item.DisplayName}; Id={item.Id}; Locked={item.IsWidgetDragDropLocked}");
+    }
+
+    private void OpenWidgetSettings_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            item.WidgetInstance is null ||
+            !item.WidgetInstance.HasSettings)
+        {
+            return;
+        }
+
+        OpenWidgetSettingsSection(
+            item.WidgetInstance,
+            "General");
+
+        item.NotifyWidgetStateChanged();
+        RefreshDockItemHoverEffects();
+
+        DebugLog.Write(
+            "Widget",
+            $"Settings opened in Settings Hub; Item={item.DisplayName}; Id={item.Id}; Section=General; DisableDefaultHoverEffect={item.DisableDefaultHoverEffect}");
+    }
+
+    private void OpenWidgetAlarm_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            item.WidgetInstance is null ||
+            !item.WidgetInstance.HasAlarm)
+        {
+            return;
+        }
+
+        item.WidgetInstance.OpenAlarm(
+            this);
+
+        item.NotifyWidgetStateChanged();
+
+        DebugLog.Write(
+            "Widget",
+            $"Alarm closed; Item={item.DisplayName}; Id={item.Id}; Active={item.IsWidgetAlarmActive}");
+    }
+
+    private void OpenWidgetTimer_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            item.WidgetInstance is null ||
+            !item.WidgetInstance.HasTimer)
+        {
+            return;
+        }
+
+        item.WidgetInstance.OpenTimer(
+            this);
+
+        item.NotifyWidgetStateChanged();
+
+        DebugLog.Write(
+            "Widget",
+            $"Timer companion requested; Item={item.DisplayName}; Id={item.Id}; Active={item.IsWidgetTimerActive}");
+    }
+
+    private void OpenWidgetStopwatch_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            item.WidgetInstance is null ||
+            !item.WidgetInstance.HasStopwatch)
+        {
+            return;
+        }
+
+        item.WidgetInstance.OpenStopwatch(
+            this);
+
+        item.NotifyWidgetStateChanged();
+
+        DebugLog.Write(
+            "Widget",
+            $"Stopwatch companion requested; Item={item.DisplayName}; Id={item.Id}; Active={item.IsWidgetStopwatchActive}");
+    }
+
+    private void OpenWidgetCalendar_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            item.WidgetInstance is null ||
+            !item.WidgetInstance.HasCalendar)
+        {
+            return;
+        }
+
+        item.WidgetInstance.ApplyHostAppearance(
+            CreateWidgetAppearance());
+
+        item.WidgetInstance.OpenCalendar(
+            this);
+
+        item.NotifyWidgetStateChanged();
+
+        DebugLog.Write(
+            "Widget",
+            $"Calendar closed; Item={item.DisplayName}; Id={item.Id}; Active={item.IsWidgetCalendarActive}");
+    }
+
+    private void RootContextMenu_Opened(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.ContextMenu contextMenu)
+        {
+            return;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "AlwaysOnTopContextMenuItem") is MenuItem alwaysOnTopMenuItem)
+        {
+            alwaysOnTopMenuItem.IsChecked =
+                _settings.AlwaysOnTop;
+        }
+
+        if (FindContextMenuItem(
+                contextMenu.Items,
+                "DisableAutohideContextMenuItem") is MenuItem disableAutohideMenuItem)
+        {
+            disableAutohideMenuItem.IsChecked =
+                _settings.CollapseDisabled;
+        }
+    }
+
+    private void AlwaysOnTopContextMenuItem_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem)
+        {
+            return;
+        }
+
+        _settings.AlwaysOnTop =
+            menuItem.IsChecked;
+
+        ApplyNativeWindowStyle();
+        SaveSettings();
+
+        DebugLog.Write(
+            "ZOrder",
+            $"Always on top changed from root context menu; Enabled={_settings.AlwaysOnTop}");
+    }
+
+    private void DisableAutohideContextMenuItem_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem)
+        {
+            return;
+        }
+
+        _settings.CollapseDisabled =
+            menuItem.IsChecked;
+
+        if (_settings.CollapseDisabled)
+        {
+            _collapseTimer.Stop();
+            Expand();
+        }
+        else if (!IsMouseOver)
+        {
+            RestartCollapseTimer();
+        }
+
+        SaveSettings();
+
+        DebugLog.Write(
+            "Autohide",
+            $"Disable autohide changed from root context menu; Disabled={_settings.CollapseDisabled}");
+    }
+
+    private void OpenWidgetSettingsSection(
+        IGlueDockWidget widget,
+        string sectionId)
+    {
+        if (_settingsWindow is null)
+        {
+            OpenSettings_Click(
+                this,
+                new RoutedEventArgs());
+        }
+
+        if (_settingsWindow is null)
+        {
+            return;
+        }
+
+        _settingsWindow.OpenWidgetSettingsSection(
+            widget,
+            sectionId);
+
+        _settingsWindow.Activate();
+    }
+
     private void OpenSettings_Click(
         object sender,
         RoutedEventArgs e)
@@ -1922,15 +3314,156 @@ public partial class MainWindow : Window
                 ApplySettingsLive,
                 ApplyItemSpacingLive,
                 ApplySettingsPreview,
-                App.Language)
+                AddWidgetFromSettings,
+                GetWidgetAddCount,
+                App.Language,
+                CreateWidgetAppearance(),
+                GetSettingsWidgetInstances(
+                    DockItems))
             {
-                Owner = this
+                Owner =
+                    _settings.AlwaysOnTop
+                        ? null
+                        : this,
+                WindowStartupLocation =
+                    _settings.AlwaysOnTop
+                        ? WindowStartupLocation.CenterScreen
+                        : WindowStartupLocation.CenterOwner
             };
 
         _settingsWindow.Closed +=
             SettingsWindow_Closed;
 
         _settingsWindow.Show();
+    }
+
+    private static IReadOnlyList<IGlueDockWidget> GetSettingsWidgetInstances(
+        IEnumerable<DockItem> items)
+    {
+        List<IGlueDockWidget> widgets =
+            [];
+
+        HashSet<IGlueDockWidget> seen =
+            new();
+
+        CollectSettingsWidgetInstances(
+            items,
+            widgets,
+            seen);
+
+        return widgets;
+    }
+
+    private static void CollectSettingsWidgetInstances(
+        IEnumerable<DockItem> items,
+        List<IGlueDockWidget> widgets,
+        HashSet<IGlueDockWidget> seen)
+    {
+        foreach (DockItem item in items)
+        {
+            if (!item.IsRuntimeOnly &&
+                item.WidgetInstance is IGlueDockWidget widget &&
+                seen.Add(
+                    widget))
+            {
+                widgets.Add(
+                    widget);
+            }
+
+            if (item.Children.Count > 0)
+            {
+                CollectSettingsWidgetInstances(
+                    item.Children,
+                    widgets,
+                    seen);
+            }
+        }
+    }
+
+    private int GetWidgetAddCount(
+        string assemblyPath)
+    {
+        return CountWidgetInstances(
+            DockItems,
+            assemblyPath);
+    }
+
+    private static int CountWidgetInstances(
+        IEnumerable<DockItem> items,
+        string assemblyPath)
+    {
+        int count =
+            0;
+
+        string fullAssemblyPath =
+            Path.GetFullPath(
+                assemblyPath);
+
+        foreach (DockItem item in items)
+        {
+            if (!item.IsRuntimeOnly &&
+                item.IsWidget &&
+                !string.IsNullOrWhiteSpace(
+                    item.Path) &&
+                string.Equals(
+                    Path.GetFullPath(
+                        item.Path),
+                    fullAssemblyPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+
+            if (item.Children.Count > 0)
+            {
+                count +=
+                    CountWidgetInstances(
+                        item.Children,
+                        fullAssemblyPath);
+            }
+        }
+
+        return count;
+    }
+
+    private void AddWidgetFromSettings(
+        string path)
+    {
+        DockItem item =
+            CreateDockItem(
+                path);
+
+        if (!item.IsWidget)
+        {
+            MessageBox.Show(
+                this,
+                App.Language["Message.WidgetIncompatible"],
+                App.Language["App.Name"],
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+
+            DebugLog.Write(
+                "Widget",
+                $"Rejected from settings; Path={path}; Reason=Incompatible");
+
+            return;
+        }
+
+        DockItems.Add(
+            item);
+
+        item.WidgetInstance?.ApplyHostAppearance(
+            CreateWidgetAppearance());
+
+        EnsureRootRowCapacity();
+        UpdateItemsOrientation();
+        UpdateWindowBounds();
+        UpdateItemLabelVisibility();
+        SaveSettings();
+
+        DebugLog.Write(
+            "Widget",
+            $"Added from settings; Path={item.Path}; Name={item.DisplayName}; Id={item.Id}");
     }
 
     private void SettingsWindow_Closed(
@@ -2000,7 +3533,7 @@ public partial class MainWindow : Window
 
         DebugLog.Write(
             "Settings",
-            $"Apply live; Theme={_settings.ThemeName}; CollapseDisabled={_settings.CollapseDisabled}; Delay={_settings.CollapseDelayMilliseconds}; SubdockDelay={_settings.SubdockCollapseDelayMilliseconds}; Labels={_settings.ShowItemLabels}; Previews={_settings.ShowFilePreviews}; SmallShortcutOverlay={_settings.UseSmallShortcutOverlay}; Scale={_settings.DockScale:0.00}; ItemSpacing={_settings.ItemSpacing:0}; Opacity={_settings.Opacity:0.00}; Blur={_settings.BlurRadius:0}; Animation={_settings.AnimationStyle}; Hover={_settings.HoverEffect}");
+            $"Apply live; Theme={_settings.ThemeName}; CollapseDisabled={_settings.CollapseDisabled}; Delay={_settings.CollapseDelayMilliseconds}; SubdockDelay={_settings.SubdockCollapseDelayMilliseconds}; SubdockClickOnly={_settings.SubdockOpenOnClickOnly}; RootTooltips={_settings.ShowRootDockTooltips}; SubDockTooltips={_settings.ShowSubDockTooltips}; Labels={_settings.ShowItemLabels}; Previews={_settings.ShowFilePreviews}; ShortcutOverlayMode={_settings.ShortcutOverlayMode}; Scale={_settings.DockScale:0.00}; ItemSpacing={_settings.ItemSpacing:0}; Opacity={_settings.Opacity:0.00}; Blur={_settings.BlurRadius:0}; Animation={_settings.AnimationStyle}; Hover={_settings.HoverEffect}");
 
         _collapseTimer.Interval =
             TimeSpan.FromMilliseconds(
@@ -2025,8 +3558,15 @@ public partial class MainWindow : Window
 
         UpdateItemsOrientation();
         ApplyAppearance();
+
+        _settingsWindow?.ApplyAppearance(
+            CreateWidgetAppearance());
+
+        ApplyWidgetAppearance(
+            DockItems);
         UpdateItemLabelVisibility();
         UpdateDockItemPreviews();
+        ApplyRootDockTooltipSetting();
         RefreshDockItemHoverEffects();
 
         if (_settings.CollapseDisabled)
@@ -2037,6 +3577,16 @@ public partial class MainWindow : Window
         else if (!IsMouseOver)
         {
             RestartCollapseTimer();
+        }
+
+        if (_settings.SubdockOpenOnClickOnly &&
+            _pinnedSubmenuItem is null &&
+            _openSubDock?.IsVisible == true)
+        {
+            _hoverSubmenuItem = null;
+            _hoverSubmenuAnchor = null;
+            StopSubmenuHoverCloseTimer();
+            _openSubDock.CloseAnimated();
         }
 
         if (_openSubDock?.IsVisible == true)
@@ -2074,6 +3624,69 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ApplyRootDockTooltipSetting()
+    {
+        ToolTipService.SetIsEnabled(
+            DockItemsControl,
+            _settings.ShowRootDockTooltips);
+
+        for (int index = 0;
+             index < DockItemsControl.Items.Count;
+             index++)
+        {
+            if (DockItemsControl.ItemContainerGenerator.ContainerFromIndex(
+                    index) is not DependencyObject container)
+            {
+                continue;
+            }
+
+            Border? border =
+                FindVisualChild<Border>(
+                    container,
+                    "DockItemBorder");
+
+            if (border is null)
+            {
+                continue;
+            }
+
+            ApplyToolTipSettingToVisualTree(
+                border,
+                _settings.ShowRootDockTooltips);
+        }
+
+        DebugLog.Write(
+            "ToolTip",
+            $"Applied; Scope=Root; Enabled={_settings.ShowRootDockTooltips}; Items={DockItemsControl.Items.Count}");
+    }
+
+    private static void ApplyToolTipSettingToVisualTree(
+        DependencyObject root,
+        bool enabled)
+    {
+        if (root is FrameworkElement frameworkElement)
+        {
+            ToolTipService.SetIsEnabled(
+                frameworkElement,
+                enabled);
+        }
+
+        int childCount =
+            VisualTreeHelper.GetChildrenCount(
+                root);
+
+        for (int index = 0;
+             index < childCount;
+             index++)
+        {
+            ApplyToolTipSettingToVisualTree(
+                VisualTreeHelper.GetChild(
+                    root,
+                    index),
+                enabled);
+        }
+    }
+
     private void UpdateDockItemPreviews()
     {
         foreach (DockItem item in DockItems)
@@ -2094,12 +3707,243 @@ public partial class MainWindow : Window
                 : ShellIcon.GetIcon(
                     item.Path,
                     _settings.ShowFilePreviews,
-                    _settings.UseSmallShortcutOverlay);
+                    _settings.ShortcutOverlayMode);
 
         foreach (DockItem child in item.Children)
         {
             UpdateDockItemPreview(
                 child);
+        }
+    }
+
+    private GlueDockWidgetAppearance CreateWidgetAppearance()
+    {
+        DockTheme theme =
+            DockThemeService.Load(
+                _settings.ThemeName);
+
+        bool isMica =
+            string.Equals(
+                _settings.ThemeName,
+                "Mica",
+                StringComparison.OrdinalIgnoreCase);
+
+        return
+            new GlueDockWidgetAppearance
+            {
+                ThemeName =
+                    _settings.ThemeName,
+                DockBackgroundBrush =
+                    (Resources["DockBackgroundBrush"] as System.Windows.Media.Brush ??
+                     System.Windows.Media.Brushes.Transparent).Clone(),
+                DockItemBackgroundBrush =
+                    (Resources["DockItemBackgroundBrush"] as System.Windows.Media.Brush ??
+                     System.Windows.Media.Brushes.Transparent).Clone(),
+                DockItemBorderBrush =
+                    (Resources["DockItemBorderBrush"] as System.Windows.Media.Brush ??
+                     System.Windows.Media.Brushes.Transparent).Clone(),
+                DockTextBrush =
+                    (Resources["DockTextBrush"] as System.Windows.Media.Brush ??
+                     System.Windows.Media.Brushes.White).Clone(),
+                DockBorderEnabled =
+                    _settings.DockBorderEnabled,
+                DockBorderColor =
+                    ParseThemeColor(
+                        _settings.DockBorderColor,
+                        Colors.White),
+                Opacity =
+                    isMica
+                        ? 0.72 +
+                          (Math.Clamp(
+                              _settings.Opacity,
+                              0,
+                              1) * 0.28)
+                        : _settings.Opacity,
+                BlurRadius =
+                    isMica
+                        ? 0
+                        : _settings.BlurRadius,
+                GlassSurfaceEnabled =
+                    theme.GlassSurfaceEnabled,
+                GlassTopColor =
+                    ParseThemeColor(
+                        theme.GlassTopColor,
+                        Color.FromArgb(
+                            0xD0,
+                            0xE8,
+                            0xF2,
+                            0xEC)),
+                GlassBottomColor =
+                    ParseThemeColor(
+                        theme.GlassBottomColor,
+                        Color.FromArgb(
+                            0x80,
+                            0xA8,
+                            0xBE,
+                            0xB4)),
+                GlassHighlightColor =
+                    ParseThemeColor(
+                        theme.GlassHighlightColor,
+                        Color.FromArgb(
+                            0xB0,
+                            0xFF,
+                            0xFF,
+                            0xFF)),
+                GlassCornerRadius =
+                    Math.Clamp(
+                        theme.GlassCornerRadius,
+                        0,
+                        80),
+                GlassGradientReferenceHeight =
+                    BaseExpandedThickness,
+                AvailableThemes =
+                    CreateWidgetThemeAppearances()
+            };
+    }
+
+    private IReadOnlyList<GlueDockWidgetThemeAppearance> CreateWidgetThemeAppearances()
+    {
+        List<GlueDockWidgetThemeAppearance> appearances =
+            new();
+
+        foreach (DockThemeOption option in
+                 DockThemeService.GetAvailableThemes())
+        {
+            DockTheme theme =
+                DockThemeService.Load(
+                    option.Id);
+
+            bool isMica =
+                string.Equals(
+                    option.Id,
+                    "Mica",
+                    StringComparison.OrdinalIgnoreCase);
+
+            double effectiveOpacity =
+                isMica
+                    ? 0.72 +
+                      (Math.Clamp(
+                          _settings.Opacity,
+                          0,
+                          1) * 0.28)
+                    : _settings.Opacity;
+
+            double effectiveBlurRadius =
+                isMica
+                    ? 0
+                    : _settings.BlurRadius;
+
+            Color backgroundColor =
+                ParseThemeColor(
+                    theme.DockBackgroundColor,
+                    Color.FromRgb(
+                        0x12,
+                        0x16,
+                        0x1C));
+
+            byte backgroundAlpha =
+                (byte)Math.Clamp(
+                    Math.Round(
+                        effectiveOpacity * 255),
+                    0,
+                    255);
+
+            appearances.Add(
+                new GlueDockWidgetThemeAppearance
+                {
+                    ThemeName =
+                        option.Id,
+                    DisplayName =
+                        option.DisplayName,
+                    DockBackgroundBrush =
+                        new SolidColorBrush(
+                            Color.FromArgb(
+                                backgroundAlpha,
+                                backgroundColor.R,
+                                backgroundColor.G,
+                                backgroundColor.B)),
+                    DockItemBackgroundBrush =
+                        new SolidColorBrush(
+                            ParseThemeColor(
+                                theme.ItemBackgroundColor,
+                                Color.FromArgb(
+                                    0x22,
+                                    0xFF,
+                                    0xFF,
+                                    0xFF))),
+                    DockItemBorderBrush =
+                        new SolidColorBrush(
+                            ParseThemeColor(
+                                theme.ItemBorderColor,
+                                Color.FromArgb(
+                                    0x22,
+                                    0xFF,
+                                    0xFF,
+                                    0xFF))),
+                    DockTextBrush =
+                        new SolidColorBrush(
+                            ParseThemeColor(
+                                theme.TextColor,
+                                Colors.White)),
+                    Opacity =
+                        effectiveOpacity,
+                    BlurRadius =
+                        effectiveBlurRadius,
+                    GlassSurfaceEnabled =
+                        theme.GlassSurfaceEnabled,
+                    GlassTopColor =
+                        ParseThemeColor(
+                            theme.GlassTopColor,
+                            Color.FromArgb(
+                                0xD0,
+                                0xE8,
+                                0xF2,
+                                0xEC)),
+                    GlassBottomColor =
+                        ParseThemeColor(
+                            theme.GlassBottomColor,
+                            Color.FromArgb(
+                                0x80,
+                                0xA8,
+                                0xBE,
+                                0xB4)),
+                    GlassHighlightColor =
+                        ParseThemeColor(
+                            theme.GlassHighlightColor,
+                            Color.FromArgb(
+                                0xB0,
+                                0xFF,
+                                0xFF,
+                                0xFF)),
+                    GlassCornerRadius =
+                        Math.Clamp(
+                            theme.GlassCornerRadius,
+                            0,
+                            80),
+                    GlassGradientReferenceHeight =
+                        BaseExpandedThickness
+                });
+        }
+
+        return appearances;
+    }
+
+    private void ApplyWidgetAppearance(
+        IEnumerable<DockItem> items)
+    {
+        GlueDockWidgetAppearance appearance =
+            CreateWidgetAppearance();
+
+        foreach (DockItem item in items)
+        {
+            item.WidgetInstance?.ApplyHostAppearance(
+                appearance);
+
+            if (item.Children.Count > 0)
+            {
+                ApplyWidgetAppearance(
+                    item.Children);
+            }
         }
     }
 
@@ -2154,6 +3998,14 @@ public partial class MainWindow : Window
             "Material",
             $"Root; Theme={_settings.ThemeName}; Mica={isMica}; UserOpacity={_settings.Opacity:0.00}; EffectiveOpacity={effectiveOpacity:0.00}; UserBlur={_settings.BlurRadius:0.##}; EffectiveBlur={effectiveBlurRadius:0.##}");
 
+        Resources["DockBackgroundBrush"] =
+            new SolidColorBrush(
+                Color.FromArgb(
+                    expandedAlpha,
+                    expandedColor.R,
+                    expandedColor.G,
+                    expandedColor.B));
+
         Resources["DockItemBackgroundBrush"] =
             new SolidColorBrush(
                 ParseThemeColor(
@@ -2202,6 +4054,88 @@ public partial class MainWindow : Window
 
         if (_isExpanded)
         {
+            double scale =
+                Math.Clamp(
+                    _settings.DockScale,
+                    0.60,
+                    2.00);
+
+            double thicknessScale =
+                Math.Clamp(
+                    _settings.DockThicknessScale,
+                    0.30,
+                    1.50);
+
+            double basePadding =
+                10 * scale;
+
+            double itemSpacing =
+                Math.Clamp(
+                    _settings.ItemSpacing,
+                    -8,
+                    42);
+
+            double minimumContentThickness =
+                (_settings.Edge is
+                    DockEdge.Left or
+                    DockEdge.Right
+                    ? 58 + itemSpacing + 6
+                    : _settings.ShowItemLabels
+                        ? ItemSlotLength
+                        : 56) *
+                scale;
+
+            double expandedThickness =
+                Math.Max(
+                    minimumContentThickness,
+                    BaseExpandedThickness *
+                    scale *
+                    thicknessScale);
+
+            double thicknessPadding =
+                Math.Max(
+                    0,
+                    (expandedThickness -
+                     minimumContentThickness) /
+                    2.0);
+
+            Thickness chromePadding =
+                _settings.Edge is
+                    DockEdge.Left or
+                    DockEdge.Right
+                    ? new Thickness(
+                        thicknessPadding,
+                        basePadding,
+                        thicknessPadding,
+                        basePadding)
+                    : new Thickness(
+                        basePadding,
+                        thicknessPadding,
+                        basePadding,
+                        thicknessPadding);
+
+            DockChrome.Padding =
+                chromePadding;
+
+            DockGlassSurface.Margin =
+                new Thickness(
+                    -chromePadding.Left,
+                    -chromePadding.Top,
+                    -chromePadding.Right,
+                    -chromePadding.Bottom);
+
+            DockGlassHighlight.Margin =
+                DockGlassSurface.Margin;
+
+            DockGlassFlames.Margin =
+                DockGlassSurface.Margin;
+
+            if (FindName("DockGlassStars") is Canvas dockGlassStars)
+            {
+                dockGlassStars.Margin =
+                    DockGlassSurface.Margin;
+            }
+
             ApplyGlassSurface(
                 theme,
                 effectiveOpacity,
@@ -2325,10 +4259,20 @@ public partial class MainWindow : Window
                         0x1C);
             }
 
+            byte collapsedAlpha =
+                (byte)Math.Clamp(
+                    Math.Round(
+                        Math.Clamp(
+                            _settings.CollapsedBarOpacity,
+                            0,
+                            1) * 255),
+                    0,
+                    255);
+
             DockChrome.Background =
                 new SolidColorBrush(
                     Color.FromArgb(
-                        expandedAlpha,
+                        collapsedAlpha,
                         collapsedColor.R,
                         collapsedColor.G,
                         collapsedColor.B));
@@ -2391,23 +4335,269 @@ public partial class MainWindow : Window
                     0xBE,
                     0xB4));
 
-        LinearGradientBrush surfaceBrush =
-            new(
+        double gradientSurfaceWidth =
+            Math.Max(
+                DockGlassSurface.ActualWidth,
+                DockChrome.ActualWidth);
+
+        double gradientSurfaceHeight =
+            Math.Max(
+                DockGlassSurface.ActualHeight,
+                DockChrome.ActualHeight);
+
+        (Point gradientStartPoint, Point gradientEndPoint) =
+            GetGlassGradientAnimationPoints(
+                new Point(
+                    theme.GlassGradientStartX,
+                    theme.GlassGradientStartY),
+                new Point(
+                    theme.GlassGradientEndX,
+                    theme.GlassGradientEndY),
+                theme.GlassGradientAnimationAspectCorrect,
+                gradientSurfaceWidth,
+                gradientSurfaceHeight);
+
+        string gradientAnimationSignature =
+            CreateGlassGradientAnimationSignature(
+                theme,
                 topColor,
-                bottomColor,
-                new Point(
-                    0.5,
-                    0),
-                new Point(
-                    0.5,
-                    1))
+                bottomColor);
+
+        LinearGradientBrush? existingSurfaceBrush =
+            DockGlassSurface.Background
+                as LinearGradientBrush;
+
+        bool reuseGradientAnimation =
+            theme.GlassGradientAnimationEnabled &&
+            string.Equals(
+                _glassGradientAnimationSignature,
+                gradientAnimationSignature,
+                StringComparison.Ordinal) &&
+            existingSurfaceBrush is not null;
+
+        LinearGradientBrush surfaceBrush;
+
+        if (reuseGradientAnimation)
+        {
+            surfaceBrush =
+                existingSurfaceBrush!;
+
+            surfaceBrush.Opacity =
+                Math.Clamp(
+                    opacity,
+                    0.10,
+                    1.0);
+
+            DebugLog.Write(
+                "ThemeGradientAnimation",
+                "Root REUSE; Existing animation kept running.");
+        }
+        else
+        {
+            surfaceBrush =
+                new LinearGradientBrush(
+                    topColor,
+                    bottomColor,
+                    gradientStartPoint,
+                    gradientEndPoint)
+                {
+                    Opacity =
+                        Math.Clamp(
+                            opacity,
+                            0.10,
+                            1.0)
+                };
+
+        if (theme.GlassGradientAnimationEnabled)
+        {
+            Duration animationDuration =
+                new(
+                    TimeSpan.FromSeconds(
+                        Math.Clamp(
+                            theme.GlassGradientAnimationDurationSeconds,
+                            0.1,
+                            120)));
+
+            if (string.Equals(
+                    theme.GlassGradientAnimationMode,
+                    "RotateTransform",
+                    StringComparison.OrdinalIgnoreCase))
             {
-                Opacity =
-                    Math.Clamp(
-                        opacity,
-                        0.10,
-                        1.0)
-            };
+                RotateTransform rotationTransform =
+                    new(
+                        0,
+                        gradientSurfaceWidth / 2.0,
+                        gradientSurfaceHeight / 2.0);
+
+                surfaceBrush.Transform =
+                    rotationTransform;
+
+                DoubleAnimation rotationAnimation =
+                    new(
+                        0,
+                        theme.GlassGradientAnimationRotationDegrees,
+                        animationDuration)
+                    {
+                        AutoReverse =
+                            theme.GlassGradientAnimationAutoReverse,
+                        EasingFunction =
+                            CreateGlassGradientEasingFunction(
+                                theme),
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                rotationTransform.BeginAnimation(
+                    RotateTransform.AngleProperty,
+                    rotationAnimation);
+            }
+            else if (theme.GlassGradientAnimationKeyFrames.Count >= 2)
+            {
+                PointAnimationUsingKeyFrames startPointAnimation =
+                    new()
+                    {
+                        Duration =
+                            animationDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                PointAnimationUsingKeyFrames endPointAnimation =
+                    new()
+                    {
+                        Duration =
+                            animationDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                foreach (DockThemeGradientKeyFrame keyFrame
+                    in theme.GlassGradientAnimationKeyFrames
+                        .OrderBy(
+                            keyFrame =>
+                                keyFrame.Progress))
+                {
+                    KeyTime keyTime =
+                        KeyTime.FromPercent(
+                            Math.Clamp(
+                                keyFrame.Progress,
+                                0,
+                                1));
+
+                    IEasingFunction? easingFunction =
+                        CreateGlassGradientEasingFunction(
+                            theme);
+
+                    (Point keyFrameStartPoint, Point keyFrameEndPoint) =
+                        GetGlassGradientAnimationPoints(
+                            new Point(
+                                keyFrame.StartX,
+                                keyFrame.StartY),
+                            new Point(
+                                keyFrame.EndX,
+                                keyFrame.EndY),
+                            theme.GlassGradientAnimationAspectCorrect,
+                            gradientSurfaceWidth,
+                            gradientSurfaceHeight);
+
+                    if (easingFunction is null)
+                    {
+                        startPointAnimation.KeyFrames.Add(
+                            new LinearPointKeyFrame(
+                                keyFrameStartPoint,
+                                keyTime));
+
+                        endPointAnimation.KeyFrames.Add(
+                            new LinearPointKeyFrame(
+                                keyFrameEndPoint,
+                                keyTime));
+                    }
+                    else
+                    {
+                        startPointAnimation.KeyFrames.Add(
+                            new EasingPointKeyFrame(
+                                keyFrameStartPoint,
+                                keyTime,
+                                easingFunction));
+
+                        endPointAnimation.KeyFrames.Add(
+                            new EasingPointKeyFrame(
+                                keyFrameEndPoint,
+                                keyTime,
+                                CreateGlassGradientEasingFunction(
+                                    theme)));
+                    }
+                }
+
+                surfaceBrush.BeginAnimation(
+                    LinearGradientBrush.StartPointProperty,
+                    startPointAnimation);
+
+                surfaceBrush.BeginAnimation(
+                    LinearGradientBrush.EndPointProperty,
+                    endPointAnimation);
+            }
+            else
+            {
+                IEasingFunction? easingFunction =
+                    CreateGlassGradientEasingFunction(
+                        theme);
+
+                (Point gradientTargetStartPoint, Point gradientTargetEndPoint) =
+                    GetGlassGradientAnimationPoints(
+                        new Point(
+                            theme.GlassGradientAnimationToStartX,
+                            theme.GlassGradientAnimationToStartY),
+                        new Point(
+                            theme.GlassGradientAnimationToEndX,
+                            theme.GlassGradientAnimationToEndY),
+                        theme.GlassGradientAnimationAspectCorrect,
+                        gradientSurfaceWidth,
+                        gradientSurfaceHeight);
+
+                PointAnimation startPointAnimation =
+                    new(
+                        gradientStartPoint,
+                        gradientTargetStartPoint,
+                        animationDuration)
+                    {
+                        AutoReverse =
+                            theme.GlassGradientAnimationAutoReverse,
+                        EasingFunction =
+                            easingFunction,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                PointAnimation endPointAnimation =
+                    new(
+                        gradientEndPoint,
+                        gradientTargetEndPoint,
+                        animationDuration)
+                    {
+                        AutoReverse =
+                            theme.GlassGradientAnimationAutoReverse,
+                        EasingFunction =
+                            easingFunction,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                surfaceBrush.BeginAnimation(
+                    LinearGradientBrush.StartPointProperty,
+                    startPointAnimation);
+
+                surfaceBrush.BeginAnimation(
+                    LinearGradientBrush.EndPointProperty,
+                    endPointAnimation);
+            }
+        }
+
+        _glassGradientAnimationSignature =
+            theme.GlassGradientAnimationEnabled
+                ? gradientAnimationSignature
+                : null;
+        }
 
         Color highlightColor =
             ParseThemeColor(
@@ -2455,6 +4645,13 @@ public partial class MainWindow : Window
 
         DockGlassSurface.Background =
             surfaceBrush;
+
+        if (!reuseGradientAnimation)
+        {
+            StartGlassGradientDebugSampling(
+                theme,
+                surfaceBrush);
+        }
 
         DockGlassSurface.Effect =
             null;
@@ -2511,13 +4708,3844 @@ public partial class MainWindow : Window
         DockGlassHighlight.Visibility =
             Visibility.Visible;
 
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!_isExpanded)
+                {
+                    return;
+                }
+
+                DockTheme currentTheme =
+                    DockThemeService.Load(
+                        _settings.ThemeName);
+
+                ApplyGlassFlameEffect(
+                    currentTheme);
+
+                ApplyGlassStarEffect(
+                    currentTheme);
+            },
+            DispatcherPriority.Loaded);
+
         DebugLog.Write(
             "AeroRender",
             $"Root; GlassSurfaceEnabled={theme.GlassSurfaceEnabled}; GlassTopColor={theme.GlassTopColor}; GlassBottomColor={theme.GlassBottomColor}; GlassHighlightColor={theme.GlassHighlightColor}; GlassCornerRadius={cornerRadius:0.##}; SurfaceOpacity={surfaceBrush.Opacity:0.##}; HighlightVisibility={DockGlassHighlight.Visibility}; BorderThickness={DockGlassHighlight.BorderThickness}; FrameStops={frameBrush.GradientStops.Count}; FrameStop0={frameBrush.GradientStops[0].Color}; FrameStop1={frameBrush.GradientStops[1].Color}; FrameStop2={frameBrush.GradientStops[2].Color}");
     }
 
+    private void StartGlassGradientDebugSampling(
+        DockTheme theme,
+        LinearGradientBrush surfaceBrush)
+    {
+        StopGlassGradientDebugSampling();
+
+        if (!DebugLog.IsEnabled ||
+            !theme.GlassGradientAnimationEnabled)
+        {
+            return;
+        }
+
+        _glassGradientDebugSequence++;
+
+        _glassGradientDebugLastRenderElapsedMilliseconds =
+            0;
+
+        _glassGradientDebugLastRenderVisualAngleDegrees =
+            null;
+
+        _glassGradientDebugRenderFrameIndex =
+            0;
+
+        _glassGradientDebugBrush =
+            surfaceBrush;
+
+        _glassGradientDebugStopwatch =
+            Stopwatch.StartNew();
+
+        _glassGradientDebugLastElapsedMilliseconds =
+            0;
+
+        _glassGradientDebugLastAngleDegrees =
+            null;
+
+        _glassGradientDebugLastVisualAngleDegrees =
+            null;
+
+        _glassGradientDebugDurationMilliseconds =
+            Math.Clamp(
+                theme.GlassGradientAnimationDurationSeconds,
+                0.1,
+                120) *
+            1000.0;
+
+        _glassGradientDebugKeyFrameProgresses =
+            theme.GlassGradientAnimationKeyFrames
+                .OrderBy(
+                    keyFrame =>
+                        keyFrame.Progress)
+                .Select(
+                    keyFrame =>
+                        Math.Clamp(
+                            keyFrame.Progress,
+                            0,
+                            1))
+                .ToArray();
+
+        string keyFrames =
+            theme.GlassGradientAnimationKeyFrames.Count == 0
+                ? "(none)"
+                : string.Join(
+                    " | ",
+                    theme.GlassGradientAnimationKeyFrames
+                        .OrderBy(
+                            keyFrame =>
+                                keyFrame.Progress)
+                        .Select(
+                            keyFrame =>
+                                $"{keyFrame.Progress:0.######}:({keyFrame.StartX:0.######},{keyFrame.StartY:0.######})->({keyFrame.EndX:0.######},{keyFrame.EndY:0.######})"));
+
+        DebugLog.Write(
+            "ThemeGradientAnimation",
+            $"Root START; Sequence={_glassGradientDebugSequence}; Theme={theme.Name}; Mode={theme.GlassGradientAnimationMode}; RotationDegrees={theme.GlassGradientAnimationRotationDegrees:0.###}; DurationSeconds={theme.GlassGradientAnimationDurationSeconds:0.###}; AutoReverse={theme.GlassGradientAnimationAutoReverse}; Easing={theme.GlassGradientAnimationEasing}; EasingMode={theme.GlassGradientAnimationEasingMode}; AspectCorrect={theme.GlassGradientAnimationAspectCorrect}; SurfaceSize=({DockGlassSurface.ActualWidth:0.###},{DockGlassSurface.ActualHeight:0.###}); Start=({theme.GlassGradientStartX:0.######},{theme.GlassGradientStartY:0.######}); End=({theme.GlassGradientEndX:0.######},{theme.GlassGradientEndY:0.######}); ToStart=({theme.GlassGradientAnimationToStartX:0.######},{theme.GlassGradientAnimationToStartY:0.######}); ToEnd=({theme.GlassGradientAnimationToEndX:0.######},{theme.GlassGradientAnimationToEndY:0.######}); KeyFrames={keyFrames}");
+
+        _glassGradientDebugTimer =
+            new DispatcherTimer(
+                DispatcherPriority.Background,
+                Dispatcher)
+            {
+                Interval =
+                    TimeSpan.FromMilliseconds(
+                        100)
+            };
+
+        _glassGradientDebugTimer.Tick +=
+            GlassGradientDebugTimer_Tick;
+
+        _glassGradientDebugTimer.Start();
+
+        CompositionTarget.Rendering +=
+            GlassGradientDebugRendering;
+    }
+
+    private void StopGlassGradientDebugSampling()
+    {
+        CompositionTarget.Rendering -=
+            GlassGradientDebugRendering;
+
+        if (_glassGradientDebugTimer is not null)
+        {
+            _glassGradientDebugTimer.Stop();
+
+            _glassGradientDebugTimer.Tick -=
+                GlassGradientDebugTimer_Tick;
+
+            _glassGradientDebugTimer =
+                null;
+        }
+
+        _glassGradientDebugStopwatch?.Stop();
+
+        _glassGradientDebugStopwatch =
+            null;
+
+        _glassGradientDebugBrush =
+            null;
+
+        _glassGradientDebugLastElapsedMilliseconds =
+            0;
+
+        _glassGradientDebugLastAngleDegrees =
+            null;
+
+        _glassGradientDebugLastVisualAngleDegrees =
+            null;
+
+        _glassGradientDebugDurationMilliseconds =
+            0;
+
+        _glassGradientDebugKeyFrameProgresses =
+            [];
+
+        _glassGradientDebugLastRenderElapsedMilliseconds =
+            0;
+
+        _glassGradientDebugLastRenderVisualAngleDegrees =
+            null;
+
+        _glassGradientDebugRenderFrameIndex =
+            0;
+    }
+
+    private void GlassGradientDebugRendering(
+        object? sender,
+        EventArgs e)
+    {
+        if (!DebugLog.IsEnabled)
+        {
+            StopGlassGradientDebugSampling();
+            return;
+        }
+
+        if (_glassGradientDebugBrush is null ||
+            _glassGradientDebugStopwatch is null)
+        {
+            StopGlassGradientDebugSampling();
+            return;
+        }
+
+        long elapsedMilliseconds =
+            _glassGradientDebugStopwatch.ElapsedMilliseconds;
+
+        long deltaMilliseconds =
+            elapsedMilliseconds -
+            _glassGradientDebugLastRenderElapsedMilliseconds;
+
+        Point startPoint =
+            _glassGradientDebugBrush.StartPoint;
+
+        Point endPoint =
+            _glassGradientDebugBrush.EndPoint;
+
+        double vectorX =
+            endPoint.X -
+            startPoint.X;
+
+        double vectorY =
+            endPoint.Y -
+            startPoint.Y;
+
+        double surfaceWidth =
+            Math.Max(
+                DockGlassSurface.ActualWidth,
+                1.0);
+
+        double surfaceHeight =
+            Math.Max(
+                DockGlassSurface.ActualHeight,
+                1.0);
+
+        Point visualStartPoint =
+            new(
+                startPoint.X *
+                surfaceWidth,
+                startPoint.Y *
+                surfaceHeight);
+
+        Point visualEndPoint =
+            new(
+                endPoint.X *
+                surfaceWidth,
+                endPoint.Y *
+                surfaceHeight);
+
+        if (_glassGradientDebugBrush.Transform is not null &&
+            !_glassGradientDebugBrush.Transform.Value.IsIdentity)
+        {
+            visualStartPoint =
+                _glassGradientDebugBrush.Transform.Transform(
+                    visualStartPoint);
+
+            visualEndPoint =
+                _glassGradientDebugBrush.Transform.Transform(
+                    visualEndPoint);
+        }
+
+        double visualVectorX =
+            visualEndPoint.X -
+            visualStartPoint.X;
+
+        double visualVectorY =
+            visualEndPoint.Y -
+            visualStartPoint.Y;
+
+        double visualVectorLength =
+            Math.Sqrt(
+                (visualVectorX * visualVectorX) +
+                (visualVectorY * visualVectorY));
+
+        double visualAngleDegrees =
+            Math.Atan2(
+                visualVectorY,
+                visualVectorX) *
+            180.0 /
+            Math.PI;
+
+        if (visualAngleDegrees < 0)
+        {
+            visualAngleDegrees +=
+                360.0;
+        }
+
+        double? visualAngularDeltaDegrees =
+            null;
+
+        double? visualAngularSpeedDegreesPerSecond =
+            null;
+
+        if (_glassGradientDebugLastRenderVisualAngleDegrees.HasValue &&
+            deltaMilliseconds > 0)
+        {
+            double visualDelta =
+                visualAngleDegrees -
+                _glassGradientDebugLastRenderVisualAngleDegrees.Value;
+
+            while (visualDelta > 180.0)
+            {
+                visualDelta -=
+                    360.0;
+            }
+
+            while (visualDelta < -180.0)
+            {
+                visualDelta +=
+                    360.0;
+            }
+
+            visualAngularDeltaDegrees =
+                visualDelta;
+
+            visualAngularSpeedDegreesPerSecond =
+                visualDelta /
+                (deltaMilliseconds / 1000.0);
+        }
+
+        double cycleProgress =
+            _glassGradientDebugDurationMilliseconds > 0
+                ? (elapsedMilliseconds %
+                    _glassGradientDebugDurationMilliseconds) /
+                    _glassGradientDebugDurationMilliseconds
+                : 0;
+
+        TimeSpan? renderingTime =
+            e is RenderingEventArgs renderingEventArgs
+                ? renderingEventArgs.RenderingTime
+                : null;
+
+        _glassGradientDebugRenderFrameIndex++;
+
+        DebugLog.Write(
+            "ThemeGradientRender",
+            $"Root RENDER; Sequence={_glassGradientDebugSequence}; Frame={_glassGradientDebugRenderFrameIndex}; RenderingTimeMs={(renderingTime.HasValue ? renderingTime.Value.TotalMilliseconds.ToString("0.###") : "n/a")}; ElapsedMs={elapsedMilliseconds}; DeltaMs={deltaMilliseconds}; CycleProgress={cycleProgress:0.######}; SurfaceSize=({surfaceWidth:0.###},{surfaceHeight:0.###}); Start=({startPoint.X:0.######},{startPoint.Y:0.######}); End=({endPoint.X:0.######},{endPoint.Y:0.######}); VisualVectorLength={visualVectorLength:0.######}; VisualAngleDegrees={visualAngleDegrees:0.###}; VisualAngularDeltaDegrees={(visualAngularDeltaDegrees.HasValue ? visualAngularDeltaDegrees.Value.ToString("0.###") : "n/a")}; VisualAngularSpeedDegreesPerSecond={(visualAngularSpeedDegreesPerSecond.HasValue ? visualAngularSpeedDegreesPerSecond.Value.ToString("0.###") : "n/a")}; HasAnimatedProperties={_glassGradientDebugBrush.HasAnimatedProperties}; SurfaceVisible={DockGlassSurface.IsVisible}; SurfaceOpacity={DockGlassSurface.Opacity:0.###}");
+
+        _glassGradientDebugLastRenderElapsedMilliseconds =
+            elapsedMilliseconds;
+
+        _glassGradientDebugLastRenderVisualAngleDegrees =
+            visualAngleDegrees;
+    }
+
+    private void GlassGradientDebugTimer_Tick(
+        object? sender,
+        EventArgs e)
+    {
+        if (!DebugLog.IsEnabled)
+        {
+            StopGlassGradientDebugSampling();
+            return;
+        }
+
+        if (_glassGradientDebugBrush is null ||
+            _glassGradientDebugStopwatch is null)
+        {
+            StopGlassGradientDebugSampling();
+            return;
+        }
+
+        long elapsedMilliseconds =
+            _glassGradientDebugStopwatch.ElapsedMilliseconds;
+
+        long deltaMilliseconds =
+            elapsedMilliseconds -
+            _glassGradientDebugLastElapsedMilliseconds;
+
+        Point startPoint =
+            _glassGradientDebugBrush.StartPoint;
+
+        Point endPoint =
+            _glassGradientDebugBrush.EndPoint;
+
+        double vectorX =
+            endPoint.X -
+            startPoint.X;
+
+        double vectorY =
+            endPoint.Y -
+            startPoint.Y;
+
+        double vectorLength =
+            Math.Sqrt(
+                (vectorX * vectorX) +
+                (vectorY * vectorY));
+
+        double angleDegrees =
+            Math.Atan2(
+                vectorY,
+                vectorX) *
+            180.0 /
+            Math.PI;
+
+        if (angleDegrees < 0)
+        {
+            angleDegrees +=
+                360.0;
+        }
+
+        double surfaceWidth =
+            Math.Max(
+                DockGlassSurface.ActualWidth,
+                1.0);
+
+        double surfaceHeight =
+            Math.Max(
+                DockGlassSurface.ActualHeight,
+                1.0);
+
+        Point visualStartPoint =
+            new(
+                startPoint.X *
+                surfaceWidth,
+                startPoint.Y *
+                surfaceHeight);
+
+        Point visualEndPoint =
+            new(
+                endPoint.X *
+                surfaceWidth,
+                endPoint.Y *
+                surfaceHeight);
+
+        if (_glassGradientDebugBrush.Transform is not null &&
+            !_glassGradientDebugBrush.Transform.Value.IsIdentity)
+        {
+            visualStartPoint =
+                _glassGradientDebugBrush.Transform.Transform(
+                    visualStartPoint);
+
+            visualEndPoint =
+                _glassGradientDebugBrush.Transform.Transform(
+                    visualEndPoint);
+        }
+
+        double visualVectorX =
+            visualEndPoint.X -
+            visualStartPoint.X;
+
+        double visualVectorY =
+            visualEndPoint.Y -
+            visualStartPoint.Y;
+
+        double visualAngleDegrees =
+            Math.Atan2(
+                visualVectorY,
+                visualVectorX) *
+            180.0 /
+            Math.PI;
+
+        if (visualAngleDegrees < 0)
+        {
+            visualAngleDegrees +=
+                360.0;
+        }
+
+        double? angularDeltaDegrees =
+            null;
+
+        double? angularSpeedDegreesPerSecond =
+            null;
+
+        if (_glassGradientDebugLastAngleDegrees.HasValue &&
+            deltaMilliseconds > 0)
+        {
+            double delta =
+                angleDegrees -
+                _glassGradientDebugLastAngleDegrees.Value;
+
+            while (delta > 180.0)
+            {
+                delta -=
+                    360.0;
+            }
+
+            while (delta < -180.0)
+            {
+                delta +=
+                    360.0;
+            }
+
+            angularDeltaDegrees =
+                delta;
+
+            angularSpeedDegreesPerSecond =
+                delta /
+                (deltaMilliseconds / 1000.0);
+        }
+
+        double? visualAngularDeltaDegrees =
+            null;
+
+        double? visualAngularSpeedDegreesPerSecond =
+            null;
+
+        if (_glassGradientDebugLastVisualAngleDegrees.HasValue &&
+            deltaMilliseconds > 0)
+        {
+            double visualDelta =
+                visualAngleDegrees -
+                _glassGradientDebugLastVisualAngleDegrees.Value;
+
+            while (visualDelta > 180.0)
+            {
+                visualDelta -=
+                    360.0;
+            }
+
+            while (visualDelta < -180.0)
+            {
+                visualDelta +=
+                    360.0;
+            }
+
+            visualAngularDeltaDegrees =
+                visualDelta;
+
+            visualAngularSpeedDegreesPerSecond =
+                visualDelta /
+                (deltaMilliseconds / 1000.0);
+        }
+
+        double cycleProgress =
+            _glassGradientDebugDurationMilliseconds > 0
+                ? (elapsedMilliseconds %
+                    _glassGradientDebugDurationMilliseconds) /
+                    _glassGradientDebugDurationMilliseconds
+                : 0;
+
+        string activeSegment =
+            "direct";
+
+        if (_glassGradientDebugKeyFrameProgresses.Length >= 2)
+        {
+            int segmentIndex =
+                _glassGradientDebugKeyFrameProgresses.Length -
+                2;
+
+            for (int index = 0;
+                 index <
+                 _glassGradientDebugKeyFrameProgresses.Length - 1;
+                 index++)
+            {
+                if (cycleProgress <=
+                    _glassGradientDebugKeyFrameProgresses[index + 1])
+                {
+                    segmentIndex =
+                        index;
+
+                    break;
+                }
+            }
+
+            activeSegment =
+                $"{segmentIndex}:{_glassGradientDebugKeyFrameProgresses[segmentIndex]:0.######}->{_glassGradientDebugKeyFrameProgresses[segmentIndex + 1]:0.######}";
+        }
+
+        DebugLog.Write(
+            "ThemeGradientAnimation",
+            $"Root SAMPLE; Sequence={_glassGradientDebugSequence}; ElapsedMs={elapsedMilliseconds}; DeltaMs={deltaMilliseconds}; CycleProgress={cycleProgress:0.######}; Segment={activeSegment}; SurfaceSize=({DockGlassSurface.ActualWidth:0.###},{DockGlassSurface.ActualHeight:0.###}); Start=({startPoint.X:0.######},{startPoint.Y:0.######}); End=({endPoint.X:0.######},{endPoint.Y:0.######}); VectorLength={vectorLength:0.######}; AngleDegrees={angleDegrees:0.###}; AngularDeltaDegrees={(angularDeltaDegrees.HasValue ? angularDeltaDegrees.Value.ToString("0.###") : "n/a")}; AngularSpeedDegreesPerSecond={(angularSpeedDegreesPerSecond.HasValue ? angularSpeedDegreesPerSecond.Value.ToString("0.###") : "n/a")}; VisualAngleDegrees={visualAngleDegrees:0.###}; VisualAngularDeltaDegrees={(visualAngularDeltaDegrees.HasValue ? visualAngularDeltaDegrees.Value.ToString("0.###") : "n/a")}; VisualAngularSpeedDegreesPerSecond={(visualAngularSpeedDegreesPerSecond.HasValue ? visualAngularSpeedDegreesPerSecond.Value.ToString("0.###") : "n/a")}");
+
+        _glassGradientDebugLastElapsedMilliseconds =
+            elapsedMilliseconds;
+
+        _glassGradientDebugLastAngleDegrees =
+            angleDegrees;
+
+        _glassGradientDebugLastVisualAngleDegrees =
+            visualAngleDegrees;
+    }
+
+    private static string CreateGlassGradientAnimationSignature(
+        DockTheme theme,
+        Color topColor,
+        Color bottomColor)
+    {
+        string keyFrameSignature =
+            string.Join(
+                ";",
+                theme.GlassGradientAnimationKeyFrames
+                    .OrderBy(
+                        keyFrame =>
+                            keyFrame.Progress)
+                    .Select(
+                        keyFrame =>
+                            string.Join(
+                                ",",
+                                keyFrame.Progress.ToString(
+                                    "R",
+                                    System.Globalization.CultureInfo.InvariantCulture),
+                                keyFrame.StartX.ToString(
+                                    "R",
+                                    System.Globalization.CultureInfo.InvariantCulture),
+                                keyFrame.StartY.ToString(
+                                    "R",
+                                    System.Globalization.CultureInfo.InvariantCulture),
+                                keyFrame.EndX.ToString(
+                                    "R",
+                                    System.Globalization.CultureInfo.InvariantCulture),
+                                keyFrame.EndY.ToString(
+                                    "R",
+                                    System.Globalization.CultureInfo.InvariantCulture))));
+
+        return string.Join(
+            "|",
+            theme.Name,
+            topColor.ToString(),
+            bottomColor.ToString(),
+            theme.GlassGradientStartX.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientStartY.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientEndX.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientEndY.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientAnimationEnabled.ToString(),
+            theme.GlassGradientAnimationDurationSeconds.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientAnimationAutoReverse.ToString(),
+            theme.GlassGradientAnimationEasing,
+            theme.GlassGradientAnimationEasingMode,
+            theme.GlassGradientAnimationMode,
+            theme.GlassGradientAnimationRotationDegrees.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientAnimationAspectCorrect.ToString(),
+            theme.GlassGradientAnimationToStartX.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientAnimationToStartY.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientAnimationToEndX.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            theme.GlassGradientAnimationToEndY.ToString(
+                "R",
+                System.Globalization.CultureInfo.InvariantCulture),
+            keyFrameSignature);
+    }
+
+    private static (Point StartPoint, Point EndPoint) GetGlassGradientAnimationPoints(
+        Point startPoint,
+        Point endPoint,
+        bool aspectCorrect,
+        double surfaceWidth,
+        double surfaceHeight)
+    {
+        if (!aspectCorrect ||
+            surfaceWidth <= 0 ||
+            surfaceHeight <= 0)
+        {
+            return (
+                startPoint,
+                endPoint);
+        }
+
+        double vectorX =
+            endPoint.X -
+            startPoint.X;
+
+        double vectorY =
+            endPoint.Y -
+            startPoint.Y;
+
+        double vectorLength =
+            Math.Sqrt(
+                (vectorX * vectorX) +
+                (vectorY * vectorY));
+
+        if (vectorLength <=
+            double.Epsilon)
+        {
+            return (
+                startPoint,
+                endPoint);
+        }
+
+        double directionX =
+            vectorX /
+            vectorLength;
+
+        double directionY =
+            vectorY /
+            vectorLength;
+
+        double projectedSurfaceLength =
+            (Math.Abs(directionX) *
+             surfaceWidth) +
+            (Math.Abs(directionY) *
+             surfaceHeight);
+
+        double correctedVectorX =
+            projectedSurfaceLength *
+            directionX /
+            surfaceWidth;
+
+        double correctedVectorY =
+            projectedSurfaceLength *
+            directionY /
+            surfaceHeight;
+
+        double centerX =
+            (startPoint.X +
+             endPoint.X) /
+            2.0;
+
+        double centerY =
+            (startPoint.Y +
+             endPoint.Y) /
+            2.0;
+
+        return (
+            new Point(
+                centerX -
+                (correctedVectorX / 2.0),
+                centerY -
+                (correctedVectorY / 2.0)),
+            new Point(
+                centerX +
+                (correctedVectorX / 2.0),
+                centerY +
+                (correctedVectorY / 2.0)));
+    }
+
+    private static IEasingFunction? CreateGlassGradientEasingFunction(
+        DockTheme theme)
+    {
+        EasingFunctionBase? easingFunction =
+            theme.GlassGradientAnimationEasing
+                .Trim()
+                .ToLowerInvariant() switch
+                {
+                    "" => null,
+                    "linear" => null,
+                    "back" => new BackEase(),
+                    "bounce" => new BounceEase(),
+                    "circle" => new CircleEase(),
+                    "cubic" => new CubicEase(),
+                    "elastic" => new ElasticEase(),
+                    "exponential" => new ExponentialEase(),
+                    "power" => new PowerEase(),
+                    "quadratic" => new QuadraticEase(),
+                    "quartic" => new QuarticEase(),
+                    "quintic" => new QuinticEase(),
+                    "sine" => new SineEase(),
+                    _ => null
+                };
+
+        if (easingFunction == null)
+        {
+            return null;
+        }
+
+        if (Enum.TryParse(
+                theme.GlassGradientAnimationEasingMode,
+                true,
+                out EasingMode easingMode))
+        {
+            easingFunction.EasingMode =
+                easingMode;
+        }
+        else
+        {
+            easingFunction.EasingMode =
+                EasingMode.EaseInOut;
+        }
+
+        return easingFunction;
+    }
+
+    private void DockGlassStars_SizeChanged(
+        object sender,
+        SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 1 ||
+            e.NewSize.Height <= 1 ||
+            sender is not Canvas starCanvas ||
+            starCanvas.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        DockTheme theme =
+            DockThemeService.Load(
+                _settings.ThemeName);
+
+        if (!theme.GlassStarEffectEnabled ||
+            theme.GlassStarLayers.Count == 0)
+        {
+            return;
+        }
+
+        ApplyGlassStarEffect(
+            theme);
+    }
+
+    private void ApplyGlassStarEffect(
+        DockTheme theme)
+    {
+        if (FindName("DockGlassStars") is not Canvas starCanvas)
+        {
+            return;
+        }
+
+        if (!theme.GlassStarEffectEnabled ||
+            theme.GlassStarLayers.Count == 0)
+        {
+            starCanvas.Children.Clear();
+            starCanvas.Visibility =
+                Visibility.Collapsed;
+
+            _glassStarAnimationSignature =
+                null;
+
+            return;
+        }
+
+        double surfaceWidth =
+            Math.Max(
+                starCanvas.ActualWidth,
+                DockChrome.ActualWidth);
+
+        double surfaceHeight =
+            Math.Max(
+                starCanvas.ActualHeight,
+                DockChrome.ActualHeight);
+
+        if (surfaceWidth <= 1 ||
+            surfaceHeight <= 1)
+        {
+            return;
+        }
+
+        string starAnimationSignature =
+            string.Join(
+                "|",
+                theme.GlassStarLayers.Select(
+                    star =>
+                        $"{star.X:0.####},{star.Y:0.####},{star.Size:0.####},{star.Color},{star.MinimumOpacity:0.####},{star.MaximumOpacity:0.####},{star.DurationSeconds:0.####},{star.DelaySeconds:0.####},{star.GlowRadius:0.####},{star.MinimumScale:0.####},{star.MaximumScale:0.####},{star.DriftXRatio:0.####},{star.DriftYRatio:0.####}")) +
+            $"|{surfaceWidth:0.##}x{surfaceHeight:0.##}";
+
+        if (string.Equals(
+                _glassStarAnimationSignature,
+                starAnimationSignature,
+                StringComparison.Ordinal) &&
+            starCanvas.Visibility ==
+                Visibility.Visible &&
+            starCanvas.Children.Count ==
+                theme.GlassStarLayers.Count)
+        {
+            return;
+        }
+
+        starCanvas.Children.Clear();
+
+        foreach (DockThemeStarLayer star
+            in theme.GlassStarLayers)
+        {
+            double size =
+                Math.Clamp(
+                    star.Size,
+                    0.5,
+                    12);
+
+            Color starColor =
+                ParseThemeColor(
+                    star.Color,
+                    Colors.White);
+
+            RadialGradientBrush starBrush =
+                new()
+                {
+                    Center =
+                        new Point(
+                            0.5,
+                            0.5),
+                    GradientOrigin =
+                        new Point(
+                            0.5,
+                            0.5),
+                    RadiusX =
+                        0.5,
+                    RadiusY =
+                        0.5
+                };
+
+            starBrush.GradientStops.Add(
+                new GradientStop(
+                    starColor,
+                    0));
+
+            starBrush.GradientStops.Add(
+                new GradientStop(
+                    Color.FromArgb(
+                        (byte)Math.Round(
+                            starColor.A * 0.62),
+                        starColor.R,
+                        starColor.G,
+                        starColor.B),
+                    0.34));
+
+            starBrush.GradientStops.Add(
+                new GradientStop(
+                    Color.FromArgb(
+                        0,
+                        starColor.R,
+                        starColor.G,
+                        starColor.B),
+                    1));
+
+            System.Windows.Shapes.Ellipse starElement =
+                new()
+                {
+                    Width =
+                        size,
+                    Height =
+                        size,
+                    Fill =
+                        starBrush,
+                    Opacity =
+                        Math.Clamp(
+                            star.MinimumOpacity,
+                            0,
+                            1),
+                    RenderTransformOrigin =
+                        new Point(
+                            0.5,
+                            0.5),
+                    IsHitTestVisible =
+                        false
+                };
+
+            double glowRadius =
+                Math.Clamp(
+                    star.GlowRadius,
+                    0,
+                    16);
+
+            if (glowRadius > 0)
+            {
+                starElement.Effect =
+                    new System.Windows.Media.Effects.BlurEffect
+                    {
+                        Radius =
+                            glowRadius
+                    };
+            }
+
+            double minimumScale =
+                Math.Clamp(
+                    star.MinimumScale,
+                    0.2,
+                    2.5);
+
+            double maximumScale =
+                Math.Clamp(
+                    star.MaximumScale,
+                    minimumScale,
+                    3.0);
+
+            ScaleTransform scaleTransform =
+                new(
+                    minimumScale,
+                    minimumScale);
+
+            TranslateTransform translateTransform =
+                new();
+
+            TransformGroup transformGroup =
+                new();
+
+            transformGroup.Children.Add(
+                scaleTransform);
+
+            transformGroup.Children.Add(
+                translateTransform);
+
+            starElement.RenderTransform =
+                transformGroup;
+
+            Canvas.SetLeft(
+                starElement,
+                (surfaceWidth *
+                 Math.Clamp(
+                     star.X,
+                     0,
+                     1)) -
+                (size / 2));
+
+            Canvas.SetTop(
+                starElement,
+                (surfaceHeight *
+                 Math.Clamp(
+                     star.Y,
+                     0,
+                     1)) -
+                (size / 2));
+
+            Duration duration =
+                new(
+                    TimeSpan.FromSeconds(
+                        Math.Clamp(
+                            star.DurationSeconds,
+                            0.6,
+                            30)));
+
+            TimeSpan beginTime =
+                TimeSpan.FromSeconds(
+                    Math.Clamp(
+                        star.DelaySeconds,
+                        0,
+                        30));
+
+            double minimumOpacity =
+                Math.Clamp(
+                    star.MinimumOpacity,
+                    0,
+                    1);
+
+            double maximumOpacity =
+                Math.Clamp(
+                    star.MaximumOpacity,
+                    minimumOpacity,
+                    1);
+
+            DoubleAnimation opacityAnimation =
+                new(
+                    minimumOpacity,
+                    maximumOpacity,
+                    duration)
+                {
+                    BeginTime =
+                        beginTime,
+                    AutoReverse =
+                        true,
+                    RepeatBehavior =
+                        RepeatBehavior.Forever,
+                    EasingFunction =
+                        new SineEase
+                        {
+                            EasingMode =
+                                EasingMode.EaseInOut
+                        }
+                };
+
+            starElement.BeginAnimation(
+                UIElement.OpacityProperty,
+                opacityAnimation);
+
+            DoubleAnimation scaleAnimation =
+                new(
+                    minimumScale,
+                    maximumScale,
+                    duration)
+                {
+                    BeginTime =
+                        beginTime,
+                    AutoReverse =
+                        true,
+                    RepeatBehavior =
+                        RepeatBehavior.Forever,
+                    EasingFunction =
+                        new SineEase
+                        {
+                            EasingMode =
+                                EasingMode.EaseInOut
+                        }
+                };
+
+            scaleTransform.BeginAnimation(
+                ScaleTransform.ScaleXProperty,
+                scaleAnimation);
+
+            scaleTransform.BeginAnimation(
+                ScaleTransform.ScaleYProperty,
+                scaleAnimation);
+
+            double driftX =
+                surfaceWidth *
+                Math.Clamp(
+                    star.DriftXRatio,
+                    -0.10,
+                    0.10);
+
+            double driftY =
+                surfaceHeight *
+                Math.Clamp(
+                    star.DriftYRatio,
+                    -0.10,
+                    0.10);
+
+            if (Math.Abs(driftX) > 0.001)
+            {
+                DoubleAnimation driftXAnimation =
+                    new(
+                        0,
+                        driftX,
+                        duration)
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever,
+                        EasingFunction =
+                            new SineEase
+                            {
+                                EasingMode =
+                                    EasingMode.EaseInOut
+                            }
+                    };
+
+                translateTransform.BeginAnimation(
+                    TranslateTransform.XProperty,
+                    driftXAnimation);
+            }
+
+            if (Math.Abs(driftY) > 0.001)
+            {
+                DoubleAnimation driftYAnimation =
+                    new(
+                        0,
+                        driftY,
+                        duration)
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever,
+                        EasingFunction =
+                            new SineEase
+                            {
+                                EasingMode =
+                                    EasingMode.EaseInOut
+                            }
+                    };
+
+                translateTransform.BeginAnimation(
+                    TranslateTransform.YProperty,
+                    driftYAnimation);
+            }
+
+            starCanvas.Children.Add(
+                starElement);
+        }
+
+        starCanvas.Visibility =
+            Visibility.Visible;
+
+        _glassStarAnimationSignature =
+            starAnimationSignature;
+    }
+
+    private void DockGlassFlames_SizeChanged(
+        object sender,
+        SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 1 ||
+            e.NewSize.Height <= 1 ||
+            DockGlassFlames.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        DockTheme theme =
+            DockThemeService.Load(
+                _settings.ThemeName);
+
+        if (!theme.GlassFlameEffectEnabled ||
+            theme.GlassFlameLayers.Count == 0)
+        {
+            return;
+        }
+
+        ApplyGlassFlameEffect(
+            theme);
+    }
+
+    private void ApplyGlassFlameEffect(
+        DockTheme theme)
+    {
+        Canvas flameCanvas =
+            DockGlassFlames;
+
+        if (!theme.GlassFlameEffectEnabled ||
+            theme.GlassFlameLayers.Count == 0)
+        {
+            StopNaturalFireHeatField();
+
+            flameCanvas.Children.Clear();
+            flameCanvas.Visibility =
+                Visibility.Collapsed;
+
+            _glassFlameAnimationSignature =
+                null;
+
+            return;
+        }
+
+        double surfaceWidth =
+            flameCanvas.ActualWidth > 1
+                ? flameCanvas.ActualWidth
+                : DockChrome.ActualWidth;
+
+        double surfaceHeight =
+            flameCanvas.ActualHeight > 1
+                ? flameCanvas.ActualHeight
+                : DockChrome.ActualHeight;
+
+        if (surfaceWidth <= 1)
+        {
+            surfaceWidth = 320;
+        }
+
+        if (surfaceHeight <= 1)
+        {
+            surfaceHeight = 88;
+        }
+
+        bool naturalFireHeatField =
+            theme.GlassFlameLayers.All(
+                layer =>
+                    string.Equals(
+                        layer.MotionMode,
+                        "NaturalFire",
+                        StringComparison.OrdinalIgnoreCase));
+
+        string flameAnimationSignature =
+            $"{theme.GlassFlameBaseGlowEnabled},{theme.GlassFlameBaseGlowColor},{theme.GlassFlameBaseGlowHeightRatio:0.####},{theme.GlassFlameBaseGlowOpacity:0.####},{theme.GlassFlameTopFadeStartRatio:0.####},{theme.GlassFlameTopFadeEndRatio:0.####}|" +
+            string.Join(
+                "|",
+                theme.GlassFlameLayers.Select(
+                    layer =>
+                        $"{layer.X:0.####},{layer.WidthRatio:0.####},{layer.HeightRatio:0.####},{layer.RiseRatio:0.####},{layer.DriftRatio:0.####},{layer.DurationSeconds:0.####},{layer.DelaySeconds:0.####},{layer.Opacity:0.####},{layer.TipColor},{layer.MidColor},{layer.CoreColor},{layer.MotionMode},{layer.BaseYRatio:0.####},{layer.MinimumScaleX:0.####},{layer.MaximumScaleX:0.####},{layer.MinimumScaleY:0.####},{layer.MaximumScaleY:0.####},{layer.SwayDegrees:0.####},{layer.FlickerRatio:0.####},{layer.BlurRadius:0.####},{layer.TipStop:0.####},{layer.MidStop:0.####},{layer.CoreStop:0.####}")) +
+            $"|{surfaceWidth:0.##}x{surfaceHeight:0.##}";
+
+        if (naturalFireHeatField)
+        {
+            ApplyNaturalFireHeatField(
+                theme,
+                flameCanvas,
+                surfaceWidth,
+                surfaceHeight,
+                flameAnimationSignature);
+
+            return;
+        }
+
+        StopNaturalFireHeatField();
+
+        int expectedChildCount =
+            theme.GlassFlameLayers.Count +
+            (theme.GlassFlameBaseGlowEnabled
+                ? 1
+                : 0);
+
+        if (string.Equals(
+                _glassFlameAnimationSignature,
+                flameAnimationSignature,
+                StringComparison.Ordinal) &&
+            flameCanvas.Visibility ==
+                Visibility.Visible &&
+            flameCanvas.Children.Count ==
+                expectedChildCount)
+        {
+            return;
+        }
+
+        flameCanvas.Children.Clear();
+
+        double topFadeStartRatio =
+            Math.Clamp(
+                theme.GlassFlameTopFadeStartRatio,
+                0,
+                0.95);
+
+        double topFadeEndRatio =
+            Math.Clamp(
+                theme.GlassFlameTopFadeEndRatio,
+                topFadeStartRatio + 0.01,
+                1);
+
+        LinearGradientBrush flameOpacityMask =
+            new()
+            {
+                StartPoint =
+                    new Point(
+                        0.5,
+                        0),
+                EndPoint =
+                    new Point(
+                        0.5,
+                        1)
+            };
+
+        flameOpacityMask.GradientStops.Add(
+            new GradientStop(
+                Colors.Transparent,
+                0));
+
+        flameOpacityMask.GradientStops.Add(
+            new GradientStop(
+                Colors.Transparent,
+                topFadeStartRatio));
+
+        flameOpacityMask.GradientStops.Add(
+            new GradientStop(
+                Colors.White,
+                topFadeEndRatio));
+
+        flameOpacityMask.GradientStops.Add(
+            new GradientStop(
+                Colors.White,
+                1));
+
+        flameCanvas.OpacityMask =
+            flameOpacityMask;
+
+        DebugLog.Write(
+            "ThemeFlame",
+            $"Root MASK; Theme={theme.Name}; SurfaceSize=({surfaceWidth:0.###},{surfaceHeight:0.###}); TopFadeStartRatio={topFadeStartRatio:0.###}; TopFadeEndRatio={topFadeEndRatio:0.###}; ClipToBounds={flameCanvas.ClipToBounds}");
+
+        if (theme.GlassFlameBaseGlowEnabled)
+        {
+            double glowHeight =
+                surfaceHeight *
+                Math.Clamp(
+                    theme.GlassFlameBaseGlowHeightRatio,
+                    0.02,
+                    1);
+
+            Color baseGlowColor =
+                ParseThemeColor(
+                    theme.GlassFlameBaseGlowColor,
+                    Color.FromArgb(
+                        0x80,
+                        0xFF,
+                        0x5A,
+                        0x00));
+
+            LinearGradientBrush baseGlowBrush =
+                new()
+                {
+                    StartPoint =
+                        new Point(
+                            0.5,
+                            0),
+                    EndPoint =
+                        new Point(
+                            0.5,
+                            1)
+                };
+
+            baseGlowBrush.GradientStops.Add(
+                new GradientStop(
+                    Color.FromArgb(
+                        0,
+                        baseGlowColor.R,
+                        baseGlowColor.G,
+                        baseGlowColor.B),
+                    0));
+
+            baseGlowBrush.GradientStops.Add(
+                new GradientStop(
+                    baseGlowColor,
+                    1));
+
+            System.Windows.Shapes.Rectangle baseGlow =
+                new()
+                {
+                    Width =
+                        surfaceWidth,
+                    Height =
+                        glowHeight,
+                    Fill =
+                        baseGlowBrush,
+                    Opacity =
+                        Math.Clamp(
+                            theme.GlassFlameBaseGlowOpacity,
+                            0,
+                            1),
+                    IsHitTestVisible =
+                        false
+                };
+
+            Canvas.SetLeft(
+                baseGlow,
+                0);
+
+            Canvas.SetTop(
+                baseGlow,
+                surfaceHeight -
+                glowHeight);
+
+            flameCanvas.Children.Add(
+                baseGlow);
+        }
+
+        foreach (DockThemeFlameLayer layer
+            in theme.GlassFlameLayers)
+        {
+            double flameWidth =
+                Math.Max(
+                    6,
+                    surfaceWidth *
+                    Math.Clamp(
+                        layer.WidthRatio,
+                        0.005,
+                        0.50));
+
+            double flameHeight =
+                Math.Max(
+                    12,
+                    surfaceHeight *
+                    Math.Clamp(
+                        layer.HeightRatio,
+                        0.08,
+                        2.50));
+
+            double riseDistance =
+                surfaceHeight *
+                Math.Clamp(
+                    layer.RiseRatio,
+                    0,
+                    1.50);
+
+            double driftDistance =
+                surfaceWidth *
+                Math.Clamp(
+                    layer.DriftRatio,
+                    0,
+                    0.25);
+
+            double durationSeconds =
+                Math.Clamp(
+                    layer.DurationSeconds,
+                    0.4,
+                    20);
+
+            double delaySeconds =
+                Math.Clamp(
+                    layer.DelaySeconds,
+                    0,
+                    20);
+
+            Color tipColor =
+                ParseThemeColor(
+                    layer.TipColor,
+                    Color.FromArgb(
+                        0,
+                        0xFF,
+                        0x32,
+                        0x00));
+
+            Color midColor =
+                ParseThemeColor(
+                    layer.MidColor,
+                    Color.FromArgb(
+                        0xD8,
+                        0xFF,
+                        0x68,
+                        0x00));
+
+            Color coreColor =
+                ParseThemeColor(
+                    layer.CoreColor,
+                    Color.FromArgb(
+                        0xFF,
+                        0xFF,
+                        0xD4,
+                        0x58));
+
+            double tipStop =
+                Math.Clamp(
+                    layer.TipStop,
+                    0,
+                    1);
+
+            double midStop =
+                Math.Clamp(
+                    layer.MidStop,
+                    tipStop,
+                    1);
+
+            double coreStop =
+                Math.Clamp(
+                    layer.CoreStop,
+                    midStop,
+                    1);
+
+            LinearGradientBrush flameBrush =
+                new()
+                {
+                    StartPoint =
+                        new Point(
+                            0.5,
+                            0),
+                    EndPoint =
+                        new Point(
+                            0.5,
+                            1)
+                };
+
+            flameBrush.GradientStops.Add(
+                new GradientStop(
+                    tipColor,
+                    tipStop));
+
+            flameBrush.GradientStops.Add(
+                new GradientStop(
+                    midColor,
+                    midStop));
+
+            flameBrush.GradientStops.Add(
+                new GradientStop(
+                    coreColor,
+                    coreStop));
+
+            bool lickMotion =
+                string.Equals(
+                    layer.MotionMode,
+                    "Lick",
+                    StringComparison.OrdinalIgnoreCase);
+
+            bool fireplaceMotion =
+                string.Equals(
+                    layer.MotionMode,
+                    "Fireplace",
+                    StringComparison.OrdinalIgnoreCase);
+
+            bool naturalFireMotion =
+                string.Equals(
+                    layer.MotionMode,
+                    "NaturalFire",
+                    StringComparison.OrdinalIgnoreCase);
+
+            System.Windows.Shapes.Path flame =
+                new()
+                {
+                    Width =
+                        flameWidth,
+                    Height =
+                        flameHeight,
+                    Stretch =
+                        Stretch.Fill,
+                    Fill =
+                        flameBrush,
+                    Data =
+                        Geometry.Parse(
+                            naturalFireMotion
+                                ? "M 50,0 C 61,18 78,54 72,79 C 70,90 63,98 54,100 L 46,100 C 37,98 30,90 28,79 C 22,54 39,18 50,0 Z"
+                                : fireplaceMotion
+                                    ? "M 50,0 C 61,11 66,24 58,36 C 74,48 73,63 63,74 C 70,86 65,96 57,100 L 41,100 C 31,95 27,83 36,71 C 26,59 29,44 40,34 C 35,22 41,10 50,0 Z"
+                                    : lickMotion
+                                        ? "M 50,0 C 57,13 70,25 63,42 C 76,56 72,75 60,100 L 40,100 C 28,76 27,59 37,44 C 31,28 43,14 50,0 Z"
+                                        : "M 50,0 C 62,18 78,31 68,49 C 84,63 80,82 60,100 L 40,100 C 20,82 16,63 32,49 C 22,31 38,18 50,0 Z"),
+                    Opacity =
+                        lickMotion ||
+                        fireplaceMotion ||
+                        naturalFireMotion
+                            ? Math.Clamp(
+                                layer.Opacity *
+                                (1 -
+                                 (Math.Clamp(
+                                     layer.FlickerRatio,
+                                     0,
+                                     0.9) *
+                                  0.5)),
+                                0,
+                                1)
+                            : 0,
+                    RenderTransformOrigin =
+                        new Point(
+                            0.5,
+                            1),
+                    IsHitTestVisible =
+                        false
+                };
+
+            double blurRadius =
+                Math.Clamp(
+                    layer.BlurRadius,
+                    0,
+                    20);
+
+            if (blurRadius > 0)
+            {
+                flame.Effect =
+                    new System.Windows.Media.Effects.BlurEffect
+                    {
+                        Radius =
+                            blurRadius
+                    };
+            }
+
+            double minimumScaleX =
+                Math.Clamp(
+                    layer.MinimumScaleX,
+                    0.20,
+                    2.50);
+
+            double maximumScaleX =
+                Math.Clamp(
+                    layer.MaximumScaleX,
+                    minimumScaleX,
+                    2.50);
+
+            double minimumScaleY =
+                Math.Clamp(
+                    layer.MinimumScaleY,
+                    0.15,
+                    2.50);
+
+            double maximumScaleY =
+                Math.Clamp(
+                    layer.MaximumScaleY,
+                    minimumScaleY,
+                    2.50);
+
+            ScaleTransform scaleTransform =
+                lickMotion ||
+                fireplaceMotion ||
+                naturalFireMotion
+                    ? new ScaleTransform(
+                        minimumScaleX,
+                        minimumScaleY)
+                    : new ScaleTransform(
+                        0.86,
+                        0.94);
+
+            RotateTransform rotateTransform =
+                new();
+
+            TranslateTransform translateTransform =
+                new();
+
+            TransformGroup transformGroup =
+                new();
+
+            transformGroup.Children.Add(
+                scaleTransform);
+
+            if (lickMotion ||
+                fireplaceMotion ||
+                naturalFireMotion)
+            {
+                transformGroup.Children.Add(
+                    rotateTransform);
+            }
+
+            transformGroup.Children.Add(
+                translateTransform);
+
+            flame.RenderTransform =
+                transformGroup;
+
+            if (fireplaceMotion ||
+                naturalFireMotion)
+            {
+                double requestedCenterX =
+                    surfaceWidth *
+                    Math.Clamp(
+                        layer.X,
+                        0,
+                        1);
+
+                double maximumRenderedHalfWidth =
+                    (flameWidth / 2) *
+                    maximumScaleX;
+
+                double minimumCenterX =
+                    maximumRenderedHalfWidth +
+                    driftDistance;
+
+                double maximumCenterX =
+                    surfaceWidth -
+                    maximumRenderedHalfWidth -
+                    driftDistance;
+
+                double flameCenterX =
+                    minimumCenterX <= maximumCenterX
+                        ? Math.Clamp(
+                            requestedCenterX,
+                            minimumCenterX,
+                            maximumCenterX)
+                        : surfaceWidth / 2;
+
+                Canvas.SetLeft(
+                    flame,
+                    flameCenterX -
+                    (flameWidth / 2));
+            }
+            else
+            {
+                Canvas.SetLeft(
+                    flame,
+                    (surfaceWidth *
+                     Math.Clamp(
+                         layer.X,
+                         0,
+                         1)) -
+                    (flameWidth / 2));
+            }
+
+            Canvas.SetTop(
+                flame,
+                lickMotion ||
+                fireplaceMotion ||
+                naturalFireMotion
+                    ? (surfaceHeight *
+                       Math.Clamp(
+                           layer.BaseYRatio,
+                           0,
+                           fireplaceMotion ||
+                           naturalFireMotion
+                               ? 1
+                               : 1.20)) -
+                      flameHeight
+                    : surfaceHeight -
+                      (flameHeight * 0.92));
+
+            Duration flameDuration =
+                new(
+                    TimeSpan.FromSeconds(
+                        durationSeconds));
+
+            TimeSpan beginTime =
+                TimeSpan.FromSeconds(
+                    delaySeconds);
+
+            if (naturalFireMotion)
+            {
+                double maximumOpacity =
+                    Math.Clamp(
+                        layer.Opacity,
+                        0,
+                        1);
+
+                double flickerRatio =
+                    Math.Clamp(
+                        layer.FlickerRatio,
+                        0,
+                        0.9);
+
+                double effectiveRiseDistance =
+                    Math.Max(
+                        riseDistance,
+                        flameHeight * 0.65);
+
+                DoubleAnimationUsingKeyFrames translateYAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                translateYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        0,
+                        KeyTime.FromPercent(
+                            0),
+                        new KeySpline(
+                            0.22,
+                            0.0,
+                            0.35,
+                            1.0)));
+
+                translateYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        -effectiveRiseDistance *
+                        0.16,
+                        KeyTime.FromPercent(
+                            0.22),
+                        new KeySpline(
+                            0.22,
+                            0.0,
+                            0.35,
+                            1.0)));
+
+                translateYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        -effectiveRiseDistance *
+                        0.54,
+                        KeyTime.FromPercent(
+                            0.58),
+                        new KeySpline(
+                            0.22,
+                            0.0,
+                            0.35,
+                            1.0)));
+
+                translateYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        -effectiveRiseDistance,
+                        KeyTime.FromPercent(
+                            1),
+                        new KeySpline(
+                            0.22,
+                            0.0,
+                            0.35,
+                            1.0)));
+
+                translateTransform.BeginAnimation(
+                    TranslateTransform.YProperty,
+                    translateYAnimation);
+
+                double swayDistance =
+                    Math.Max(
+                        driftDistance,
+                        flameWidth * 0.18);
+
+                DoubleAnimationUsingKeyFrames translateXAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                translateXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        0,
+                        KeyTime.FromPercent(
+                            0),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                translateXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        swayDistance *
+                        0.42,
+                        KeyTime.FromPercent(
+                            0.24),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                translateXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        -swayDistance *
+                        0.68,
+                        KeyTime.FromPercent(
+                            0.53),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                translateXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        swayDistance,
+                        KeyTime.FromPercent(
+                            0.79),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                translateXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        swayDistance *
+                        0.18,
+                        KeyTime.FromPercent(
+                            1),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                translateTransform.BeginAnimation(
+                    TranslateTransform.XProperty,
+                    translateXAnimation);
+
+                DoubleAnimationUsingKeyFrames scaleXAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                scaleXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumScaleX *
+                        0.78,
+                        KeyTime.FromPercent(
+                            0),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumScaleX,
+                        KeyTime.FromPercent(
+                            0.14),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        minimumScaleX +
+                        ((maximumScaleX -
+                          minimumScaleX) *
+                         0.42),
+                        KeyTime.FromPercent(
+                            0.52),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        minimumScaleX *
+                        0.52,
+                        KeyTime.FromPercent(
+                            0.82),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        Math.Max(
+                            0.12,
+                            minimumScaleX *
+                            0.24),
+                        KeyTime.FromPercent(
+                            1),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleXProperty,
+                    scaleXAnimation);
+
+                DoubleAnimationUsingKeyFrames scaleYAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                scaleYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        minimumScaleY *
+                        0.72,
+                        KeyTime.FromPercent(
+                            0),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumScaleY,
+                        KeyTime.FromPercent(
+                            0.24),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        minimumScaleY +
+                        ((maximumScaleY -
+                          minimumScaleY) *
+                         0.58),
+                        KeyTime.FromPercent(
+                            0.63),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        minimumScaleY *
+                        0.48,
+                        KeyTime.FromPercent(
+                            1),
+                        new KeySpline(
+                            0.25,
+                            0.1,
+                            0.25,
+                            1)));
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleYProperty,
+                    scaleYAnimation);
+
+                double swayDegrees =
+                    Math.Clamp(
+                        layer.SwayDegrees,
+                        0,
+                        35);
+
+                if (swayDegrees > 0)
+                {
+                    DoubleAnimationUsingKeyFrames swayAnimation =
+                        new()
+                        {
+                            BeginTime =
+                                beginTime,
+                            Duration =
+                                flameDuration,
+                            RepeatBehavior =
+                                RepeatBehavior.Forever
+                        };
+
+                    swayAnimation.KeyFrames.Add(
+                        new SplineDoubleKeyFrame(
+                            0,
+                            KeyTime.FromPercent(
+                                0),
+                            new KeySpline(
+                                0.42,
+                                0,
+                                0.58,
+                                1)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new SplineDoubleKeyFrame(
+                            swayDegrees *
+                            0.34,
+                            KeyTime.FromPercent(
+                                0.26),
+                            new KeySpline(
+                                0.42,
+                                0,
+                                0.58,
+                                1)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new SplineDoubleKeyFrame(
+                            -swayDegrees *
+                            0.58,
+                            KeyTime.FromPercent(
+                                0.57),
+                            new KeySpline(
+                                0.42,
+                                0,
+                                0.58,
+                                1)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new SplineDoubleKeyFrame(
+                            swayDegrees,
+                            KeyTime.FromPercent(
+                                0.82),
+                            new KeySpline(
+                                0.42,
+                                0,
+                                0.58,
+                                1)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new SplineDoubleKeyFrame(
+                            0,
+                            KeyTime.FromPercent(
+                                1),
+                            new KeySpline(
+                                0.42,
+                                0,
+                                0.58,
+                                1)));
+
+                    rotateTransform.BeginAnimation(
+                        RotateTransform.AngleProperty,
+                        swayAnimation);
+                }
+
+                DoubleAnimationUsingKeyFrames opacityAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                opacityAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        0,
+                        KeyTime.FromPercent(
+                            0),
+                        new KeySpline(
+                            0.2,
+                            0,
+                            0.2,
+                            1)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumOpacity *
+                        (0.74 -
+                         (flickerRatio *
+                          0.12)),
+                        KeyTime.FromPercent(
+                            0.07),
+                        new KeySpline(
+                            0.2,
+                            0,
+                            0.2,
+                            1)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumOpacity,
+                        KeyTime.FromPercent(
+                            0.20),
+                        new KeySpline(
+                            0.2,
+                            0,
+                            0.2,
+                            1)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumOpacity *
+                        (0.78 -
+                         (flickerRatio *
+                          0.18)),
+                        KeyTime.FromPercent(
+                            0.52),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        maximumOpacity *
+                        0.34,
+                        KeyTime.FromPercent(
+                            0.78),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new SplineDoubleKeyFrame(
+                        0,
+                        KeyTime.FromPercent(
+                            1),
+                        new KeySpline(
+                            0.42,
+                            0,
+                            0.58,
+                            1)));
+
+                flame.BeginAnimation(
+                    UIElement.OpacityProperty,
+                    opacityAnimation);
+
+                DebugLog.Write(
+                    "ThemeFlame",
+                    $"Root NATURAL_FORMULA; Theme={theme.Name}; X={layer.X:0.###}; Lifetime={durationSeconds:0.###}; Delay={delaySeconds:0.###}; Rise={effectiveRiseDistance:0.###}; Width={flameWidth:0.###}; Height={flameHeight:0.###}; YKeyFrames=[(0,0),(0.22,{-effectiveRiseDistance * 0.16:0.###}),(0.58,{-effectiveRiseDistance * 0.54:0.###}),(1,{-effectiveRiseDistance:0.###})]; ScaleXKeyFrames=[(0,{maximumScaleX * 0.78:0.###}),(0.14,{maximumScaleX:0.###}),(0.52,{minimumScaleX + ((maximumScaleX - minimumScaleX) * 0.42):0.###}),(0.82,{minimumScaleX * 0.52:0.###}),(1,{Math.Max(0.12, minimumScaleX * 0.24):0.###})]; ScaleYKeyFrames=[(0,{minimumScaleY * 0.72:0.###}),(0.24,{maximumScaleY:0.###}),(0.63,{minimumScaleY + ((maximumScaleY - minimumScaleY) * 0.58):0.###}),(1,{minimumScaleY * 0.48:0.###})]; OpacityKeyFrames=[(0,0),(0.07,{maximumOpacity * (0.74 - (flickerRatio * 0.12)):0.###}),(0.20,{maximumOpacity:0.###}),(0.52,{maximumOpacity * (0.78 - (flickerRatio * 0.18)):0.###}),(0.78,{maximumOpacity * 0.34:0.###}),(1,0)]");
+            }
+            else if (fireplaceMotion)
+            {
+                double maximumOpacity =
+                    Math.Clamp(
+                        layer.Opacity,
+                        0,
+                        1);
+
+                double flickerRatio =
+                    Math.Clamp(
+                        layer.FlickerRatio,
+                        0,
+                        0.9);
+
+                DoubleAnimationUsingKeyFrames scaleYAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleY,
+                        KeyTime.FromPercent(
+                            0)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumScaleY,
+                        KeyTime.FromPercent(
+                            0.17)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleY +
+                        ((maximumScaleY -
+                          minimumScaleY) *
+                         0.38),
+                        KeyTime.FromPercent(
+                            0.34)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleY +
+                        ((maximumScaleY -
+                          minimumScaleY) *
+                         0.82),
+                        KeyTime.FromPercent(
+                            0.51)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleY +
+                        ((maximumScaleY -
+                          minimumScaleY) *
+                         0.24),
+                        KeyTime.FromPercent(
+                            0.69)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumScaleY *
+                        0.94,
+                        KeyTime.FromPercent(
+                            0.84)));
+
+                scaleYAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleY,
+                        KeyTime.FromPercent(
+                            1)));
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleYProperty,
+                    scaleYAnimation);
+
+                DoubleAnimationUsingKeyFrames scaleXAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                scaleXAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumScaleX,
+                        KeyTime.FromPercent(
+                            0)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleX,
+                        KeyTime.FromPercent(
+                            0.21)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleX +
+                        ((maximumScaleX -
+                          minimumScaleX) *
+                         0.68),
+                        KeyTime.FromPercent(
+                            0.43)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        minimumScaleX +
+                        ((maximumScaleX -
+                          minimumScaleX) *
+                         0.18),
+                        KeyTime.FromPercent(
+                            0.66)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumScaleX *
+                        0.92,
+                        KeyTime.FromPercent(
+                            0.82)));
+
+                scaleXAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumScaleX,
+                        KeyTime.FromPercent(
+                            1)));
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleXProperty,
+                    scaleXAnimation);
+
+                double swayDegrees =
+                    Math.Clamp(
+                        layer.SwayDegrees,
+                        0,
+                        35);
+
+                if (swayDegrees > 0)
+                {
+                    DoubleAnimationUsingKeyFrames swayAnimation =
+                        new()
+                        {
+                            BeginTime =
+                                beginTime,
+                            Duration =
+                                flameDuration,
+                            RepeatBehavior =
+                                RepeatBehavior.Forever
+                        };
+
+                    swayAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            0,
+                            KeyTime.FromPercent(
+                                0)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            -swayDegrees *
+                            0.72,
+                            KeyTime.FromPercent(
+                                0.19)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            swayDegrees,
+                            KeyTime.FromPercent(
+                                0.37)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            -swayDegrees *
+                            0.38,
+                            KeyTime.FromPercent(
+                                0.58)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            swayDegrees *
+                            0.54,
+                            KeyTime.FromPercent(
+                                0.79)));
+
+                    swayAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            0,
+                            KeyTime.FromPercent(
+                                1)));
+
+                    rotateTransform.BeginAnimation(
+                        RotateTransform.AngleProperty,
+                        swayAnimation);
+                }
+
+                if (driftDistance > 0)
+                {
+                    DoubleAnimationUsingKeyFrames driftAnimation =
+                        new()
+                        {
+                            BeginTime =
+                                beginTime,
+                            Duration =
+                                flameDuration,
+                            RepeatBehavior =
+                                RepeatBehavior.Forever
+                        };
+
+                    driftAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            0,
+                            KeyTime.FromPercent(
+                                0)));
+
+                    driftAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            -driftDistance,
+                            KeyTime.FromPercent(
+                                0.23)));
+
+                    driftAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            driftDistance *
+                            0.72,
+                            KeyTime.FromPercent(
+                                0.46)));
+
+                    driftAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            -driftDistance *
+                            0.36,
+                            KeyTime.FromPercent(
+                                0.71)));
+
+                    driftAnimation.KeyFrames.Add(
+                        new LinearDoubleKeyFrame(
+                            0,
+                            KeyTime.FromPercent(
+                                1)));
+
+                    translateTransform.BeginAnimation(
+                        TranslateTransform.XProperty,
+                        driftAnimation);
+                }
+
+                DoubleAnimationUsingKeyFrames flickerAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity *
+                        (1 -
+                         (flickerRatio *
+                          0.35)),
+                        KeyTime.FromPercent(
+                            0)));
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity,
+                        KeyTime.FromPercent(
+                            0.13)));
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity *
+                        (1 -
+                         flickerRatio),
+                        KeyTime.FromPercent(
+                            0.29)));
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity *
+                        0.96,
+                        KeyTime.FromPercent(
+                            0.47)));
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity *
+                        (1 -
+                         (flickerRatio *
+                          0.62)),
+                        KeyTime.FromPercent(
+                            0.63)));
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity,
+                        KeyTime.FromPercent(
+                            0.81)));
+
+                flickerAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity *
+                        (1 -
+                         (flickerRatio *
+                          0.35)),
+                        KeyTime.FromPercent(
+                            1)));
+
+                flame.BeginAnimation(
+                    UIElement.OpacityProperty,
+                    flickerAnimation);
+            }
+            else if (lickMotion)
+            {
+                IEasingFunction smoothEase =
+                    new SineEase
+                    {
+                        EasingMode =
+                            EasingMode.EaseInOut
+                    };
+
+                DoubleAnimation scaleYAnimation =
+                    new(
+                        minimumScaleY,
+                        maximumScaleY,
+                        new Duration(
+                            TimeSpan.FromSeconds(
+                                durationSeconds *
+                                0.50)))
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever,
+                        EasingFunction =
+                            smoothEase
+                    };
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleYProperty,
+                    scaleYAnimation);
+
+                DoubleAnimation scaleXAnimation =
+                    new(
+                        maximumScaleX,
+                        minimumScaleX,
+                        new Duration(
+                            TimeSpan.FromSeconds(
+                                durationSeconds *
+                                0.37)))
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever,
+                        EasingFunction =
+                            new SineEase
+                            {
+                                EasingMode =
+                                    EasingMode.EaseInOut
+                            }
+                    };
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleXProperty,
+                    scaleXAnimation);
+
+                double swayDegrees =
+                    Math.Clamp(
+                        layer.SwayDegrees,
+                        0,
+                        35);
+
+                if (swayDegrees > 0)
+                {
+                    DoubleAnimation swayAnimation =
+                        new(
+                            -swayDegrees,
+                            swayDegrees,
+                            new Duration(
+                                TimeSpan.FromSeconds(
+                                    durationSeconds *
+                                    0.43)))
+                        {
+                            BeginTime =
+                                beginTime,
+                            AutoReverse =
+                                true,
+                            RepeatBehavior =
+                                RepeatBehavior.Forever,
+                            EasingFunction =
+                                new SineEase
+                                {
+                                    EasingMode =
+                                        EasingMode.EaseInOut
+                                }
+                        };
+
+                    rotateTransform.BeginAnimation(
+                        RotateTransform.AngleProperty,
+                        swayAnimation);
+                }
+
+                if (driftDistance > 0)
+                {
+                    DoubleAnimation driftAnimation =
+                        new(
+                            -driftDistance,
+                            driftDistance,
+                            new Duration(
+                                TimeSpan.FromSeconds(
+                                    durationSeconds *
+                                    0.61)))
+                        {
+                            BeginTime =
+                                beginTime,
+                            AutoReverse =
+                                true,
+                            RepeatBehavior =
+                                RepeatBehavior.Forever,
+                            EasingFunction =
+                                new SineEase
+                                {
+                                    EasingMode =
+                                        EasingMode.EaseInOut
+                                }
+                        };
+
+                    translateTransform.BeginAnimation(
+                        TranslateTransform.XProperty,
+                        driftAnimation);
+                }
+
+                double maximumOpacity =
+                    Math.Clamp(
+                        layer.Opacity,
+                        0,
+                        1);
+
+                double minimumOpacity =
+                    maximumOpacity *
+                    (1 -
+                     Math.Clamp(
+                         layer.FlickerRatio,
+                         0,
+                         0.9));
+
+                DoubleAnimation flickerAnimation =
+                    new(
+                        minimumOpacity,
+                        maximumOpacity,
+                        new Duration(
+                            TimeSpan.FromSeconds(
+                                durationSeconds *
+                                0.29)))
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever,
+                        EasingFunction =
+                            new SineEase
+                            {
+                                EasingMode =
+                                    EasingMode.EaseInOut
+                            }
+                    };
+
+                flame.BeginAnimation(
+                    UIElement.OpacityProperty,
+                    flickerAnimation);
+            }
+            else
+            {
+                DoubleAnimation riseAnimation =
+                    new(
+                        0,
+                        -riseDistance,
+                        flameDuration)
+                    {
+                        BeginTime =
+                            beginTime,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                translateTransform.BeginAnimation(
+                    TranslateTransform.YProperty,
+                    riseAnimation);
+
+                DoubleAnimation driftAnimation =
+                    new(
+                        -driftDistance,
+                        driftDistance,
+                        new Duration(
+                            TimeSpan.FromSeconds(
+                                durationSeconds *
+                                0.34)))
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                translateTransform.BeginAnimation(
+                    TranslateTransform.XProperty,
+                    driftAnimation);
+
+                DoubleAnimation scaleXAnimation =
+                    new(
+                        0.72,
+                        1.18,
+                        new Duration(
+                            TimeSpan.FromSeconds(
+                                durationSeconds *
+                                0.27)))
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleXProperty,
+                    scaleXAnimation);
+
+                DoubleAnimation scaleYAnimation =
+                    new(
+                        0.90,
+                        1.08,
+                        new Duration(
+                            TimeSpan.FromSeconds(
+                                durationSeconds *
+                                0.41)))
+                    {
+                        BeginTime =
+                            beginTime,
+                        AutoReverse =
+                            true,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                scaleTransform.BeginAnimation(
+                    ScaleTransform.ScaleYProperty,
+                    scaleYAnimation);
+
+                double maximumOpacity =
+                    Math.Clamp(
+                        layer.Opacity,
+                        0,
+                        1);
+
+                DoubleAnimationUsingKeyFrames opacityAnimation =
+                    new()
+                    {
+                        BeginTime =
+                            beginTime,
+                        Duration =
+                            flameDuration,
+                        RepeatBehavior =
+                            RepeatBehavior.Forever
+                    };
+
+                opacityAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        0,
+                        KeyTime.FromPercent(
+                            0)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity,
+                        KeyTime.FromPercent(
+                            0.12)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity *
+                        0.86,
+                        KeyTime.FromPercent(
+                            0.56)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        maximumOpacity,
+                        KeyTime.FromPercent(
+                            0.76)));
+
+                opacityAnimation.KeyFrames.Add(
+                    new LinearDoubleKeyFrame(
+                        0,
+                        KeyTime.FromPercent(
+                            1)));
+
+                flame.BeginAnimation(
+                    UIElement.OpacityProperty,
+                    opacityAnimation);
+            }
+
+            DebugLog.Write(
+                "ThemeFlame",
+                $"Root LAYER; Theme={theme.Name}; MotionMode={layer.MotionMode}; X={layer.X:0.###}; Width={flameWidth:0.###}; Height={flameHeight:0.###}; CanvasTop={Canvas.GetTop(flame):0.###}; RiseDistance={riseDistance:0.###}; DriftDistance={driftDistance:0.###}; DurationSeconds={durationSeconds:0.###}; DelaySeconds={delaySeconds:0.###}; Opacity={layer.Opacity:0.###}; SurfaceHeight={surfaceHeight:0.###}; ClipToBounds={flameCanvas.ClipToBounds}");
+
+            flameCanvas.Children.Add(
+                flame);
+        }
+
+        flameCanvas.Visibility =
+            Visibility.Visible;
+
+        _glassFlameAnimationSignature =
+            flameAnimationSignature;
+    }
+
+    private void ApplyNaturalFireHeatField(
+        DockTheme theme,
+        Canvas flameCanvas,
+        double surfaceWidth,
+        double surfaceHeight,
+        string flameAnimationSignature)
+    {
+        if (string.Equals(
+                _glassFlameAnimationSignature,
+                flameAnimationSignature,
+                StringComparison.Ordinal) &&
+            _naturalFireRenderingActive &&
+            _naturalFireBitmap is not null &&
+            flameCanvas.Visibility ==
+                Visibility.Visible)
+        {
+            return;
+        }
+
+        StopNaturalFireHeatField();
+
+        flameCanvas.Children.Clear();
+        flameCanvas.OpacityMask =
+            null;
+
+        double flameClipRadius =
+            Math.Clamp(
+                theme.GlassCornerRadius,
+                0,
+                Math.Min(
+                    surfaceWidth,
+                    surfaceHeight) /
+                2);
+
+        flameCanvas.Clip =
+            new RectangleGeometry(
+                new System.Windows.Rect(
+                    0,
+                    0,
+                    surfaceWidth,
+                    surfaceHeight),
+                flameClipRadius,
+                flameClipRadius);
+
+        if (theme.GlassFlameBaseGlowEnabled)
+        {
+            double glowHeight =
+                surfaceHeight *
+                Math.Clamp(
+                    theme.GlassFlameBaseGlowHeightRatio,
+                    0.02,
+                    1);
+
+            Color baseGlowColor =
+                ParseThemeColor(
+                    theme.GlassFlameBaseGlowColor,
+                    Color.FromArgb(
+                        0x80,
+                        0xFF,
+                        0x5A,
+                        0x00));
+
+            LinearGradientBrush baseGlowBrush =
+                new()
+                {
+                    StartPoint =
+                        new Point(
+                            0.5,
+                            0),
+                    EndPoint =
+                        new Point(
+                            0.5,
+                            1)
+                };
+
+            baseGlowBrush.GradientStops.Add(
+                new GradientStop(
+                    Color.FromArgb(
+                        0,
+                        baseGlowColor.R,
+                        baseGlowColor.G,
+                        baseGlowColor.B),
+                    0));
+
+            baseGlowBrush.GradientStops.Add(
+                new GradientStop(
+                    baseGlowColor,
+                    1));
+
+            System.Windows.Shapes.Rectangle baseGlow =
+                new()
+                {
+                    Width =
+                        surfaceWidth,
+                    Height =
+                        glowHeight,
+                    Fill =
+                        baseGlowBrush,
+                    Opacity =
+                        Math.Clamp(
+                            theme.GlassFlameBaseGlowOpacity,
+                            0,
+                            1),
+                    IsHitTestVisible =
+                        false
+                };
+
+            Canvas.SetLeft(
+                baseGlow,
+                0);
+
+            Canvas.SetTop(
+                baseGlow,
+                surfaceHeight -
+                glowHeight);
+
+            flameCanvas.Children.Add(
+                baseGlow);
+        }
+
+        DockThemeFlameLayer paletteLayer =
+            theme.GlassFlameLayers
+                .OrderByDescending(
+                    layer =>
+                    {
+                        Color color =
+                            ParseThemeColor(
+                                layer.CoreColor,
+                                Color.FromRgb(
+                                    0xFF,
+                                    0xD4,
+                                    0x58));
+
+                        return
+                            color.R +
+                            color.G +
+                            color.B;
+                    })
+                .First();
+
+        Color tipColor =
+            ParseThemeColor(
+                paletteLayer.TipColor,
+                Color.FromArgb(
+                    0,
+                    0xB9,
+                    0x1E,
+                    0x00));
+
+        Color midColor =
+            ParseThemeColor(
+                paletteLayer.MidColor,
+                Color.FromArgb(
+                    0xD0,
+                    0xFF,
+                    0x5A,
+                    0x00));
+
+        Color coreColor =
+            ParseThemeColor(
+                paletteLayer.CoreColor,
+                Color.FromArgb(
+                    0xFF,
+                    0xFF,
+                    0xD7,
+                    0x66));
+
+        double maximumOpacity =
+            Math.Clamp(
+                theme.GlassFlameLayers.Max(
+                    layer => layer.Opacity),
+                0.15,
+                1);
+
+        _naturalFireGridWidth =
+            Math.Clamp(
+                (int)Math.Round(
+                    surfaceWidth / 3.0),
+                96,
+                320);
+
+        _naturalFireGridHeight =
+            Math.Clamp(
+                (int)Math.Round(
+                    surfaceHeight * 0.78),
+                32,
+                72);
+
+        int pixelCount =
+            _naturalFireGridWidth *
+            _naturalFireGridHeight;
+
+        _naturalFireHeat =
+            new byte[pixelCount];
+
+        _naturalFireNextHeat =
+            new byte[pixelCount];
+
+        _naturalFirePixels =
+            new int[pixelCount];
+
+        _naturalFirePalette =
+            BuildNaturalFirePalette(
+                tipColor,
+                midColor,
+                coreColor,
+                maximumOpacity);
+
+        _naturalFireFrameIndex =
+            0;
+
+        for (int index = 0;
+             index < Math.Min(
+                 42,
+                 _naturalFireGridHeight);
+             index++)
+        {
+            AdvanceNaturalFireHeatField();
+        }
+
+        _naturalFireBitmap =
+            new WriteableBitmap(
+                _naturalFireGridWidth,
+                _naturalFireGridHeight,
+                96,
+                96,
+                PixelFormats.Pbgra32,
+                null);
+
+        System.Windows.Controls.Image fireImage =
+            new()
+            {
+                Width =
+                    surfaceWidth,
+                Height =
+                    surfaceHeight,
+                Source =
+                    _naturalFireBitmap,
+                Stretch =
+                    Stretch.Fill,
+                IsHitTestVisible =
+                    false
+            };
+
+        RenderOptions.SetBitmapScalingMode(
+            fireImage,
+            BitmapScalingMode.HighQuality);
+
+        Canvas.SetLeft(
+            fireImage,
+            0);
+
+        Canvas.SetTop(
+            fireImage,
+            0);
+
+        flameCanvas.Children.Add(
+            fireImage);
+
+        WriteNaturalFirePixels();
+
+        flameCanvas.Visibility =
+            Visibility.Visible;
+
+        _glassFlameAnimationSignature =
+            flameAnimationSignature;
+
+        _naturalFireLastFrameUtc =
+            DateTime.UtcNow;
+
+        _naturalFireLastDebugUtc =
+            _naturalFireLastFrameUtc;
+
+        _naturalFireRenderingActive =
+            true;
+
+        CompositionTarget.Rendering +=
+            NaturalFire_Rendering;
+
+        DebugLog.Write(
+            "ThemeFireField",
+            $"Root START; Theme={theme.Name}; SurfaceSize=({surfaceWidth:0.###},{surfaceHeight:0.###}); Grid={_naturalFireGridWidth}x{_naturalFireGridHeight}; Formula=bottom heat source -> weighted heat from rows below + lateral jitter - altitude cooling; Palette={tipColor}/{midColor}/{coreColor}; MaxOpacity={maximumOpacity:0.###}");
+    }
+
+    private void NaturalFire_Rendering(
+        object? sender,
+        EventArgs e)
+    {
+        if (!_naturalFireRenderingActive ||
+            _naturalFireBitmap is null ||
+            _naturalFireHeat is null ||
+            _naturalFireNextHeat is null ||
+            _naturalFirePixels is null ||
+            _naturalFirePalette is null)
+        {
+            return;
+        }
+
+        DateTime now =
+            DateTime.UtcNow;
+
+        double elapsedMilliseconds =
+            (now -
+             _naturalFireLastFrameUtc)
+            .TotalMilliseconds;
+
+        if (elapsedMilliseconds <
+            28)
+        {
+            return;
+        }
+
+        _naturalFireLastFrameUtc =
+            now;
+
+        AdvanceNaturalFireHeatField();
+        WriteNaturalFirePixels();
+
+        if ((now -
+             _naturalFireLastDebugUtc)
+            .TotalSeconds <
+            1)
+        {
+            return;
+        }
+
+        _naturalFireLastDebugUtc =
+            now;
+
+        int activeCells =
+            0;
+
+        long totalHeat =
+            0;
+
+        int maximumHeat =
+            0;
+
+        for (int index = 0;
+             index < _naturalFireHeat.Length;
+             index++)
+        {
+            int heat =
+                _naturalFireHeat[index];
+
+            if (heat > 20)
+            {
+                activeCells++;
+            }
+
+            totalHeat +=
+                heat;
+
+            maximumHeat =
+                Math.Max(
+                    maximumHeat,
+                    heat);
+        }
+
+        int bottomStart =
+            (_naturalFireGridHeight - 1) *
+            _naturalFireGridWidth;
+
+        int middleStart =
+            (_naturalFireGridHeight / 2) *
+            _naturalFireGridWidth;
+
+        int topSampleRow =
+            Math.Max(
+                0,
+                _naturalFireGridHeight / 6);
+
+        int topStart =
+            topSampleRow *
+            _naturalFireGridWidth;
+
+        double bottomAverage =
+            0;
+
+        double middleAverage =
+            0;
+
+        double topAverage =
+            0;
+
+        for (int x = 0;
+             x < _naturalFireGridWidth;
+             x++)
+        {
+            bottomAverage +=
+                _naturalFireHeat[
+                    bottomStart +
+                    x];
+
+            middleAverage +=
+                _naturalFireHeat[
+                    middleStart +
+                    x];
+
+            topAverage +=
+                _naturalFireHeat[
+                    topStart +
+                    x];
+        }
+
+        bottomAverage /=
+            _naturalFireGridWidth;
+
+        middleAverage /=
+            _naturalFireGridWidth;
+
+        topAverage /=
+            _naturalFireGridWidth;
+
+        DebugLog.Write(
+            "ThemeFireField",
+            $"Root FRAME; Frame={_naturalFireFrameIndex}; DeltaMs={elapsedMilliseconds:0.###}; ActiveCells={activeCells}/{_naturalFireHeat.Length}; AverageHeat={(double)totalHeat / _naturalFireHeat.Length:0.###}; MaxHeat={maximumHeat}; BottomAverage={bottomAverage:0.###}; MiddleAverage={middleAverage:0.###}; TopAverage={topAverage:0.###}");
+    }
+
+    private void AdvanceNaturalFireHeatField()
+    {
+        if (_naturalFireHeat is null ||
+            _naturalFireNextHeat is null ||
+            _naturalFireGridWidth <= 0 ||
+            _naturalFireGridHeight <= 2)
+        {
+            return;
+        }
+
+        int width =
+            _naturalFireGridWidth;
+
+        int height =
+            _naturalFireGridHeight;
+
+        int frame =
+            ++_naturalFireFrameIndex;
+
+        int bottomRow =
+            height - 1;
+
+        int secondBottomRow =
+            height - 2;
+
+        for (int x = 0;
+             x < width;
+             x++)
+        {
+            double broadWave =
+                (Math.Sin(
+                     (x * 0.12) +
+                     (frame * 0.11)) +
+                 1) *
+                0.5;
+
+            double fineWave =
+                (Math.Sin(
+                     (x * 0.31) -
+                     (frame * 0.17)) +
+                 1) *
+                0.5;
+
+            double flamePulse =
+                Math.Pow(
+                    (broadWave * 0.72) +
+                    (fineWave * 0.28),
+                    1.7);
+
+            int noise =
+                NaturalFireNoise(
+                    x,
+                    bottomRow,
+                    frame) -
+                128;
+
+            int sourceHeat =
+                Math.Clamp(
+                    (int)Math.Round(
+                        55 +
+                        (flamePulse * 175) +
+                        (noise * 0.18)),
+                    35,
+                    245);
+
+            _naturalFireHeat[
+                (bottomRow * width) +
+                x] =
+                (byte)sourceHeat;
+
+            _naturalFireHeat[
+                (secondBottomRow * width) +
+                x] =
+                (byte)Math.Max(
+                    _naturalFireHeat[
+                        (secondBottomRow * width) +
+                        x],
+                    (int)Math.Round(
+                        sourceHeat *
+                        0.72));
+        }
+
+        for (int y = 0;
+             y < secondBottomRow;
+             y++)
+        {
+            int belowRow =
+                y + 1;
+
+            int deeperRow =
+                Math.Min(
+                    bottomRow,
+                    y + 2);
+
+            double altitude =
+                1 -
+                (y /
+                 (double)bottomRow);
+
+            for (int x = 0;
+                 x < width;
+                 x++)
+            {
+                int noise =
+                    NaturalFireNoise(
+                        x,
+                        y,
+                        frame);
+
+                int shift =
+                    (noise % 5) -
+                    2;
+
+                int shiftedX =
+                    Math.Clamp(
+                        x + shift,
+                        0,
+                        width - 1);
+
+                int neighborX =
+                    Math.Clamp(
+                        x +
+                        (((noise >> 3) % 3) -
+                         1),
+                        0,
+                        width - 1);
+
+                int accumulatedHeat =
+                    (_naturalFireHeat[
+                         (belowRow * width) +
+                         shiftedX] *
+                     3) +
+                    _naturalFireHeat[
+                        (deeperRow * width) +
+                        neighborX];
+
+                int propagatedHeat =
+                    accumulatedHeat /
+                    4;
+
+                int cooling =
+                    2 +
+                    (int)Math.Round(
+                        altitude *
+                        6) +
+                    ((noise >> 5) & 3);
+
+                _naturalFireNextHeat[
+                    (y * width) +
+                    x] =
+                    (byte)Math.Max(
+                        0,
+                        propagatedHeat -
+                        cooling);
+            }
+        }
+
+        for (int x = 0;
+             x < width;
+             x++)
+        {
+            _naturalFireNextHeat[
+                (secondBottomRow * width) +
+                x] =
+                _naturalFireHeat[
+                    (secondBottomRow * width) +
+                    x];
+
+            _naturalFireNextHeat[
+                (bottomRow * width) +
+                x] =
+                _naturalFireHeat[
+                    (bottomRow * width) +
+                    x];
+        }
+
+        byte[] swap =
+            _naturalFireHeat;
+
+        _naturalFireHeat =
+            _naturalFireNextHeat;
+
+        _naturalFireNextHeat =
+            swap;
+
+        Array.Clear(
+            _naturalFireNextHeat,
+            0,
+            _naturalFireNextHeat.Length);
+    }
+
+    private void WriteNaturalFirePixels()
+    {
+        if (_naturalFireBitmap is null ||
+            _naturalFireHeat is null ||
+            _naturalFirePixels is null ||
+            _naturalFirePalette is null)
+        {
+            return;
+        }
+
+        int width =
+            _naturalFireGridWidth;
+
+        int height =
+            _naturalFireGridHeight;
+
+        int bottomRow =
+            Math.Max(
+                1,
+                height - 1);
+
+        for (int y = 0;
+             y < height;
+             y++)
+        {
+            double verticalRatio =
+                y /
+                (double)bottomRow;
+
+            double topFade =
+                SmoothStep(
+                    0.06,
+                    0.38,
+                    verticalRatio);
+
+            int fade =
+                (int)Math.Round(
+                    topFade *
+                    255);
+
+            for (int x = 0;
+                 x < width;
+                 x++)
+            {
+                int index =
+                    (y * width) +
+                    x;
+
+                int pixel =
+                    _naturalFirePalette[
+                        _naturalFireHeat[
+                            index]];
+
+                if (fade >= 255)
+                {
+                    _naturalFirePixels[
+                        index] =
+                        pixel;
+
+                    continue;
+                }
+
+                int alpha =
+                    (pixel >> 24) &
+                    0xFF;
+
+                int red =
+                    (pixel >> 16) &
+                    0xFF;
+
+                int green =
+                    (pixel >> 8) &
+                    0xFF;
+
+                int blue =
+                    pixel &
+                    0xFF;
+
+                alpha =
+                    (alpha *
+                     fade +
+                     127) /
+                    255;
+
+                red =
+                    (red *
+                     fade +
+                     127) /
+                    255;
+
+                green =
+                    (green *
+                     fade +
+                     127) /
+                    255;
+
+                blue =
+                    (blue *
+                     fade +
+                     127) /
+                    255;
+
+                _naturalFirePixels[
+                    index] =
+                    (alpha << 24) |
+                    (red << 16) |
+                    (green << 8) |
+                    blue;
+            }
+        }
+
+        _naturalFireBitmap.WritePixels(
+            new Int32Rect(
+                0,
+                0,
+                width,
+                height),
+            _naturalFirePixels,
+            width *
+            sizeof(int),
+            0);
+    }
+
+    private static int[] BuildNaturalFirePalette(
+        Color tipColor,
+        Color midColor,
+        Color coreColor,
+        double maximumOpacity)
+    {
+        int[] palette =
+            new int[256];
+
+        Color hotColor =
+            Color.FromRgb(
+                0xFF,
+                (byte)Math.Max(
+                    coreColor.G,
+                    (byte)0xE1),
+                (byte)Math.Max(
+                    coreColor.B,
+                    (byte)0x82));
+
+        for (int heat = 0;
+             heat < palette.Length;
+             heat++)
+        {
+            double normalizedHeat =
+                heat /
+                255.0;
+
+            if (normalizedHeat <=
+                0.06)
+            {
+                palette[heat] =
+                    0;
+
+                continue;
+            }
+
+            Color color;
+            double alphaRatio;
+
+            if (normalizedHeat <
+                0.42)
+            {
+                double progress =
+                    SmoothStep(
+                        0.06,
+                        0.42,
+                        normalizedHeat);
+
+                color =
+                    InterpolateNaturalFireColor(
+                        tipColor,
+                        midColor,
+                        progress);
+
+                alphaRatio =
+                    progress *
+                    0.58;
+            }
+            else if (normalizedHeat <
+                     0.80)
+            {
+                double progress =
+                    SmoothStep(
+                        0.42,
+                        0.80,
+                        normalizedHeat);
+
+                color =
+                    InterpolateNaturalFireColor(
+                        midColor,
+                        coreColor,
+                        progress);
+
+                alphaRatio =
+                    0.58 +
+                    (progress *
+                     0.36);
+            }
+            else
+            {
+                double progress =
+                    SmoothStep(
+                        0.80,
+                        1,
+                        normalizedHeat);
+
+                color =
+                    InterpolateNaturalFireColor(
+                        coreColor,
+                        hotColor,
+                        progress);
+
+                alphaRatio =
+                    0.94 +
+                    (progress *
+                     0.06);
+            }
+
+            byte alpha =
+                (byte)Math.Clamp(
+                    (int)Math.Round(
+                        255 *
+                        maximumOpacity *
+                        alphaRatio),
+                    0,
+                    255);
+
+            int premultipliedRed =
+                (color.R *
+                 alpha +
+                 127) /
+                255;
+
+            int premultipliedGreen =
+                (color.G *
+                 alpha +
+                 127) /
+                255;
+
+            int premultipliedBlue =
+                (color.B *
+                 alpha +
+                 127) /
+                255;
+
+            palette[heat] =
+                (alpha << 24) |
+                (premultipliedRed << 16) |
+                (premultipliedGreen << 8) |
+                premultipliedBlue;
+        }
+
+        return palette;
+    }
+
+    private static Color InterpolateNaturalFireColor(
+        Color from,
+        Color to,
+        double progress)
+    {
+        double clampedProgress =
+            Math.Clamp(
+                progress,
+                0,
+                1);
+
+        return
+            Color.FromRgb(
+                (byte)Math.Round(
+                    from.R +
+                    ((to.R -
+                      from.R) *
+                     clampedProgress)),
+                (byte)Math.Round(
+                    from.G +
+                    ((to.G -
+                      from.G) *
+                     clampedProgress)),
+                (byte)Math.Round(
+                    from.B +
+                    ((to.B -
+                      from.B) *
+                     clampedProgress)));
+    }
+
+    private static double SmoothStep(
+        double edge0,
+        double edge1,
+        double value)
+    {
+        if (edge1 <=
+            edge0)
+        {
+            return
+                value >= edge1
+                    ? 1
+                    : 0;
+        }
+
+        double t =
+            Math.Clamp(
+                (value -
+                 edge0) /
+                (edge1 -
+                 edge0),
+                0,
+                1);
+
+        return
+            t *
+            t *
+            (3 -
+             (2 * t));
+    }
+
+    private static int NaturalFireNoise(
+        int x,
+        int y,
+        int frame)
+    {
+        unchecked
+        {
+            uint value =
+                (uint)(
+                    (x * 374761393) ^
+                    (y * 668265263) ^
+                    (frame * 362437));
+
+            value =
+                (value ^
+                 (value >> 13)) *
+                1274126177u;
+
+            value ^=
+                value >> 16;
+
+            return
+                (int)(
+                    value &
+                    0xFF);
+        }
+    }
+
+    private void StopNaturalFireHeatField()
+    {
+        if (_naturalFireRenderingActive)
+        {
+            CompositionTarget.Rendering -=
+                NaturalFire_Rendering;
+        }
+
+        _naturalFireRenderingActive =
+            false;
+
+        _naturalFireBitmap =
+            null;
+
+        _naturalFireHeat =
+            null;
+
+        _naturalFireNextHeat =
+            null;
+
+        _naturalFirePixels =
+            null;
+
+        _naturalFirePalette =
+            null;
+
+        _naturalFireGridWidth =
+            0;
+
+        _naturalFireGridHeight =
+            0;
+
+        _naturalFireFrameIndex =
+            0;
+
+        _naturalFireLastFrameUtc =
+            default;
+
+        _naturalFireLastDebugUtc =
+            default;
+    }
+
     private void ResetGlassSurface()
     {
+        StopNaturalFireHeatField();
+        StopGlassGradientDebugSampling();
+
+        _glassGradientAnimationSignature =
+            null;
+
         DockChrome.CornerRadius =
             new CornerRadius(
                 20);
@@ -2529,7 +8557,24 @@ public partial class MainWindow : Window
             null;
 
         DockGlassSurface.Visibility =
-            Visibility.Collapsed;
+            Visibility.Hidden;
+
+        DockGlassFlames.Children.Clear();
+        DockGlassFlames.Visibility =
+            Visibility.Hidden;
+
+        _glassFlameAnimationSignature =
+            null;
+
+        if (FindName("DockGlassStars") is Canvas dockGlassStars)
+        {
+            dockGlassStars.Children.Clear();
+            dockGlassStars.Visibility =
+                Visibility.Hidden;
+        }
+
+        _glassStarAnimationSignature =
+            null;
 
         DockGlassHighlight.Background =
             Brushes.Transparent;
@@ -2542,7 +8587,7 @@ public partial class MainWindow : Window
                 0);
 
         DockGlassHighlight.Visibility =
-            Visibility.Collapsed;
+            Visibility.Hidden;
     }
 
     private static Color ParseThemeColor(
@@ -2613,7 +8658,8 @@ public partial class MainWindow : Window
 
     private void AddDroppedItemsToSubmenu(
         IEnumerable<string> paths,
-        DockItem submenu)
+        DockItem submenu,
+        bool moveSource)
     {
         foreach (string path in paths)
         {
@@ -2626,8 +8672,12 @@ public partial class MainWindow : Window
             try
             {
                 string managedPath =
-                    _dockItemStore.Import(
-                        path);
+                    WidgetPluginLoader.IsRuntimeWidgetPath(
+                        path)
+                        ? path
+                        : _dockItemStore.Import(
+                            path,
+                            moveSource);
 
                 submenu.Children.Add(
                     CreateDockItem(
@@ -2647,8 +8697,16 @@ public partial class MainWindow : Window
     }
 
     private void AddDroppedItems(
-        IEnumerable<string> paths)
+        IEnumerable<string> paths,
+        int insertionIndex,
+        bool moveSource)
     {
+        int targetIndex =
+            Math.Clamp(
+                insertionIndex,
+                0,
+                DockItems.Count);
+
         foreach (string path in paths)
         {
             if (!File.Exists(path) &&
@@ -2660,11 +8718,19 @@ public partial class MainWindow : Window
             try
             {
                 string managedPath =
-                    _dockItemStore.Import(path);
+                    WidgetPluginLoader.IsRuntimeWidgetPath(
+                        path)
+                        ? path
+                        : _dockItemStore.Import(
+                            path,
+                            moveSource);
 
-                DockItems.Add(
+                DockItems.Insert(
+                    targetIndex,
                     CreateDockItem(
                         managedPath));
+
+                targetIndex++;
             }
             catch (Exception ex)
             {
@@ -2676,6 +8742,8 @@ public partial class MainWindow : Window
             }
         }
 
+        EnsureRootRowCapacity();
+        UpdateItemsOrientation();
         UpdateWindowBounds();
 
         Dispatcher.BeginInvoke(
@@ -2684,6 +8752,381 @@ public partial class MainWindow : Window
                 UpdateItemLabelVisibility();
             },
             DispatcherPriority.Loaded);
+    }
+
+    private void EnsureRootRowCapacity()
+    {
+        int maxColumns =
+            Math.Clamp(
+                _settings.RootMaxColumns,
+                1,
+                50);
+
+        int occupiedSlots =
+            Math.Max(
+                1,
+                DockItems.Sum(
+                    item =>
+                        Math.Clamp(
+                            item.SlotSpan,
+                            1,
+                            4)));
+
+        int requiredRows =
+            Math.Max(
+                1,
+                (int)Math.Ceiling(
+                    occupiedSlots /
+                    (double)maxColumns));
+
+        int currentRows =
+            Math.Clamp(
+                _settings.RootMaxRows,
+                1,
+                50);
+
+        if (requiredRows <= currentRows)
+        {
+            return;
+        }
+
+        _settings.RootMaxRows =
+            Math.Min(
+                50,
+                requiredRows);
+
+        SaveSettings();
+
+        ShowLayoutAdjustmentNotice(
+            string.Format(
+                App.Language["Message.LayoutRowsAdjusted"],
+                _settings.RootMaxRows,
+                DockItems.Count));
+
+        DebugLog.Write(
+            "ItemLayout",
+            $"Root rows auto-adjusted; Items={DockItems.Count}; Columns={maxColumns}; Rows={_settings.RootMaxRows}");
+    }
+
+    private async void ShowLayoutAdjustmentNotice(
+        string text)
+    {
+        LayoutAdjustmentNoticeText.Text =
+            text;
+
+        LayoutAdjustmentNotice.Visibility =
+            Visibility.Visible;
+
+        DoubleAnimation fadeIn =
+            new(
+                0,
+                1,
+                TimeSpan.FromMilliseconds(
+                    180));
+
+        LayoutAdjustmentNotice.BeginAnimation(
+            OpacityProperty,
+            fadeIn);
+
+        await Task.Delay(
+            TimeSpan.FromSeconds(
+                5));
+
+        DoubleAnimation fadeOut =
+            new(
+                1,
+                0,
+                TimeSpan.FromMilliseconds(
+                    220));
+
+        fadeOut.Completed +=
+            (_, _) =>
+            {
+                LayoutAdjustmentNotice.Visibility =
+                    Visibility.Collapsed;
+
+                LayoutAdjustmentNotice.BeginAnimation(
+                    OpacityProperty,
+                    null);
+
+                LayoutAdjustmentNotice.Opacity =
+                    0;
+            };
+
+        LayoutAdjustmentNotice.BeginAnimation(
+            OpacityProperty,
+            fadeOut);
+    }
+
+    private void UpdateExternalDropPlaceholder(
+        Point pointerPosition,
+        string[] paths)
+    {
+        if (_externalDropPlaceholder is null)
+        {
+            string previewPath =
+                paths.FirstOrDefault(
+                    path =>
+                        File.Exists(path) ||
+                        Directory.Exists(path)) ??
+                string.Empty;
+
+            _externalDropPlaceholder =
+                new DockItem
+                {
+                    DisplayName =
+                        string.IsNullOrWhiteSpace(
+                            previewPath)
+                            ? "Drop position"
+                            : Directory.Exists(
+                                previewPath)
+                                ? Path.GetFileName(
+                                    previewPath.TrimEnd(
+                                        Path.DirectorySeparatorChar,
+                                        Path.AltDirectorySeparatorChar))
+                                : Path.GetFileNameWithoutExtension(
+                                    previewPath),
+                    IsRuntimeOnly = true,
+                    Icon =
+                        string.IsNullOrWhiteSpace(
+                            previewPath)
+                            ? null
+                            : ShellIcon.GetIcon(
+                                previewPath,
+                                _settings.ShowFilePreviews,
+                                _settings.ShortcutOverlayMode)
+                };
+
+            DockItems.Add(
+                _externalDropPlaceholder);
+
+            UpdateItemsOrientation();
+            UpdateWindowBounds();
+        }
+
+        HitTestResult? hit =
+            VisualTreeHelper.HitTest(
+                DockItemsControl,
+                pointerPosition);
+
+        DockItem? targetItem =
+            FindDockItem(
+                hit?.VisualHit);
+
+        if (targetItem is null ||
+            ReferenceEquals(
+                targetItem,
+                _externalDropPlaceholder))
+        {
+            return;
+        }
+
+        int currentPlaceholderIndex =
+            DockItems.IndexOf(
+                _externalDropPlaceholder);
+
+        int targetIndex =
+            DockItems.IndexOf(
+                targetItem);
+
+        if (targetIndex < 0)
+        {
+            return;
+        }
+
+        if (targetItem.IsRuntimeOnly)
+        {
+            KeyValuePair<IGlueDockWidget, DockItem> companionEntry =
+                _widgetCompanionItems
+                    .FirstOrDefault(
+                        entry =>
+                            ReferenceEquals(
+                                entry.Value,
+                                targetItem));
+
+            if (companionEntry.Key is not null &&
+                _widgetSourceItems.TryGetValue(
+                    companionEntry.Key,
+                    out DockItem? sourceItem))
+            {
+                int sourceIndex =
+                    DockItems.IndexOf(
+                        sourceItem);
+
+                if (sourceIndex >= 0)
+                {
+                    targetIndex =
+                        sourceIndex;
+                }
+            }
+        }
+
+        if (DockItemsControl.ItemContainerGenerator.ContainerFromItem(
+                targetItem) is FrameworkElement targetContainer)
+        {
+            Point pointerInTarget =
+                DockItemsControl.TranslatePoint(
+                    pointerPosition,
+                    targetContainer);
+
+            bool vertical =
+                _settings.Edge is
+                    DockEdge.Left or
+                    DockEdge.Right;
+
+            double axisPosition =
+                vertical
+                    ? pointerInTarget.Y
+                    : pointerInTarget.X;
+
+            double axisLength =
+                vertical
+                    ? targetContainer.ActualHeight
+                    : targetContainer.ActualWidth;
+
+            if (axisLength > 0 &&
+                axisPosition >=
+                    axisLength / 2)
+            {
+                targetIndex++;
+
+                if (targetItem.IsRuntimeOnly)
+                {
+                    targetIndex =
+                        Math.Max(
+                            targetIndex,
+                            DockItems.IndexOf(
+                                targetItem) +
+                            1);
+                }
+            }
+        }
+
+        if (currentPlaceholderIndex >= 0 &&
+            currentPlaceholderIndex <
+                targetIndex)
+        {
+            targetIndex--;
+        }
+
+        targetIndex =
+            Math.Clamp(
+                targetIndex,
+                0,
+                DockItems.Count - 1);
+
+        if (currentPlaceholderIndex ==
+            targetIndex)
+        {
+            return;
+        }
+
+        AnimateInternalDragMove(
+            _externalDropPlaceholder,
+            currentPlaceholderIndex,
+            targetIndex);
+
+        SetInternalDragItemVisibility(
+            _externalDropPlaceholder,
+            visible: true);
+
+        UpdateItemsOrientation();
+        UpdateWindowBounds();
+    }
+
+    private void SetExternalDropSubmenuHighlight(
+        FrameworkElement element)
+    {
+        Border? border =
+            FindAncestorBorder(
+                element,
+                "DockItemBorder");
+
+        if (ReferenceEquals(
+                border,
+                _externalDropSubmenuHighlightBorder))
+        {
+            return;
+        }
+
+        ClearExternalDropSubmenuHighlight();
+
+        if (border is null)
+        {
+            return;
+        }
+
+        _externalDropSubmenuHighlightBorder =
+            border;
+
+        border.BorderBrush =
+            Resources["DockTextBrush"] as System.Windows.Media.Brush ??
+            Brushes.White;
+
+        border.BorderThickness =
+            new Thickness(
+                2);
+    }
+
+    private void ClearExternalDropSubmenuHighlight()
+    {
+        if (_externalDropSubmenuHighlightBorder is null)
+        {
+            return;
+        }
+
+        _externalDropSubmenuHighlightBorder.BorderBrush =
+            Brushes.Transparent;
+
+        _externalDropSubmenuHighlightBorder.BorderThickness =
+            new Thickness(
+                1);
+
+        _externalDropSubmenuHighlightBorder =
+            null;
+    }
+
+    private static Border? FindAncestorBorder(
+        DependencyObject? start,
+        string borderName)
+    {
+        DependencyObject? current =
+            start;
+
+        while (current is not null)
+        {
+            if (current is Border border &&
+                string.Equals(
+                    border.Name,
+                    borderName,
+                    StringComparison.Ordinal))
+            {
+                return border;
+            }
+
+            current =
+                VisualTreeHelper.GetParent(
+                    current);
+        }
+
+        return null;
+    }
+
+    private void RemoveExternalDropPlaceholder()
+    {
+        if (_externalDropPlaceholder is null)
+        {
+            return;
+        }
+
+        DockItems.Remove(
+            _externalDropPlaceholder);
+
+        _externalDropPlaceholder =
+            null;
+
+        UpdateItemsOrientation();
+        UpdateWindowBounds();
     }
 
     private void ShowInternalDragGhost(
@@ -2745,6 +9188,52 @@ public partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private FrameworkElement? FindInternalSubmenuDropElementAtPosition(
+        Point pointerPosition)
+    {
+        FrameworkElement? submenuElement =
+            FindSubmenuElementAtPosition(
+                pointerPosition);
+
+        if (submenuElement?.DataContext is not DockItem submenuItem)
+        {
+            return null;
+        }
+
+        if (DockItemsControl.ItemContainerGenerator.ContainerFromItem(
+                submenuItem) is not FrameworkElement container)
+        {
+            return null;
+        }
+
+        System.Windows.Controls.Image? icon =
+            FindVisualChild<System.Windows.Controls.Image>(
+                container,
+                "DockItemIcon");
+
+        if (icon is null ||
+            icon.ActualWidth <= 0 ||
+            icon.ActualHeight <= 0)
+        {
+            return null;
+        }
+
+        Point pointerInIcon =
+            DockItemsControl.TranslatePoint(
+                pointerPosition,
+                icon);
+
+        if (pointerInIcon.X < 0 ||
+            pointerInIcon.Y < 0 ||
+            pointerInIcon.X > icon.ActualWidth ||
+            pointerInIcon.Y > icon.ActualHeight)
+        {
+            return null;
+        }
+
+        return submenuElement;
     }
 
     private void UpdateInternalDragVisual(
@@ -3011,6 +9500,9 @@ public partial class MainWindow : Window
 
             container.RenderTransform =
                 Transform.Identity;
+
+            container.Opacity =
+                1;
         }
     }
 
@@ -3090,7 +9582,10 @@ public partial class MainWindow : Window
                 DataFormats.FileDrop))
         {
             e.Effects =
-                DragDropEffects.Copy;
+                (e.KeyStates &
+                 DragDropKeyStates.ShiftKey) != 0
+                    ? DragDropEffects.Move
+                    : DragDropEffects.Copy;
 
             e.Handled = true;
             return;
@@ -3105,6 +9600,36 @@ public partial class MainWindow : Window
     private DockItem CreateDockItem(
         string path)
     {
+        path =
+            WidgetPluginLoader.ResolveRuntimeWidgetPath(
+                path);
+
+        string itemId =
+            WidgetPluginLoader.ResolveExistingInstanceId(
+                path,
+                Guid.NewGuid().ToString(
+                    "N"));
+
+        if (WidgetPluginLoader.TryCreate(
+                path,
+                itemId,
+                OpenWidgetSettingsSection,
+                out IGlueDockWidget? widget,
+                out FrameworkElement? widgetView))
+        {
+            return new DockItem
+            {
+                Id = itemId,
+                Path = path,
+                DisplayName =
+                    string.IsNullOrWhiteSpace(widget?.DisplayName)
+                        ? Path.GetFileNameWithoutExtension(path)
+                        : widget.DisplayName,
+                WidgetInstance = widget,
+                WidgetView = widgetView
+            };
+        }
+
         string trimmedPath =
             path.TrimEnd(
                 Path.DirectorySeparatorChar,
@@ -3128,34 +9653,73 @@ public partial class MainWindow : Window
                 ShellIcon.GetIcon(
                     path,
                     _settings.ShowFilePreviews,
-                    _settings.UseSmallShortcutOverlay)
+                    _settings.ShortcutOverlayMode)
         };
     }
 
     private DockItem CreateDockItem(
         DockEntrySettings entry)
     {
+        string path =
+            WidgetPluginLoader.ResolveRuntimeWidgetPath(
+                entry.Path ??
+                string.Empty);
+
+        IGlueDockWidget? widget = null;
+        FrameworkElement? widgetView = null;
+
+        string itemId =
+            string.IsNullOrWhiteSpace(
+                entry.Id)
+                ? Guid.NewGuid().ToString(
+                    "N")
+                : entry.Id;
+
+        if (!entry.IsSubmenu)
+        {
+            itemId =
+                WidgetPluginLoader.ResolveExistingInstanceId(
+                    path,
+                    itemId);
+        }
+
+        bool isWidget =
+            !entry.IsSubmenu &&
+            WidgetPluginLoader.TryCreate(
+                path,
+                itemId,
+                OpenWidgetSettingsSection,
+                out widget,
+                out widgetView);
+
         DockItem item =
             new()
             {
-                Id =
-                    string.IsNullOrWhiteSpace(entry.Id)
-                        ? Guid.NewGuid().ToString("N")
-                        : entry.Id,
-                Path = entry.Path ?? string.Empty,
-                DisplayName = entry.DisplayName ?? string.Empty,
+                Id = itemId,
+                Path = path,
+                DisplayName =
+                    string.IsNullOrWhiteSpace(entry.DisplayName) &&
+                    isWidget
+                        ? widget?.DisplayName ?? string.Empty
+                        : entry.DisplayName ?? string.Empty,
                 IsSubmenu = entry.IsSubmenu,
+                IsWidgetDragDropLocked =
+                    entry.IsWidgetDragDropLocked,
                 SubmenuIconRepositoryPath =
                     entry.SubmenuIconRepositoryPath ?? string.Empty,
+                WidgetInstance = widget,
+                WidgetView = widgetView,
                 Icon =
                     entry.IsSubmenu
                         ? SubmenuIcon.Create(
                             _settings,
                             entry.SubmenuIconRepositoryPath ?? string.Empty)
-                        : ShellIcon.GetIcon(
-                            entry.Path ?? string.Empty,
-                            _settings.ShowFilePreviews,
-                            _settings.UseSmallShortcutOverlay)
+                        : isWidget
+                            ? null
+                            : ShellIcon.GetIcon(
+                                path,
+                                _settings.ShowFilePreviews,
+                                _settings.ShortcutOverlayMode)
             };
 
         foreach (DockEntrySettings child in entry.Children ?? [])
@@ -3175,13 +9739,237 @@ public partial class MainWindow : Window
             Path = item.Path,
             DisplayName = item.DisplayName,
             IsSubmenu = item.IsSubmenu,
+            IsWidgetDragDropLocked =
+                item.IsWidgetDragDropLocked,
             SubmenuIconRepositoryPath =
                 item.SubmenuIconRepositoryPath,
             Children =
                 item.Children
+                    .Where(
+                        child =>
+                            !child.IsRuntimeOnly)
                     .Select(CreateSettingsEntry)
                     .ToList()
         };
+    }
+
+    private static bool CanStartDockItemAsAdministrator(
+        DockItem item)
+    {
+        if (item.IsRuntimeOnly ||
+            item.IsSubmenu ||
+            item.IsWidget ||
+            string.IsNullOrWhiteSpace(
+                item.Path) ||
+            !File.Exists(
+                item.Path))
+        {
+            return false;
+        }
+
+        string launchPath =
+            item.Path;
+
+        if (item.Path.EndsWith(
+                ".lnk",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (!ShellIcon.TryGetShortcutLaunchInfo(
+                    item.Path,
+                    out string shortcutTargetPath,
+                    out _,
+                    out _) ||
+                string.IsNullOrWhiteSpace(
+                    shortcutTargetPath) ||
+                !File.Exists(
+                    shortcutTargetPath))
+            {
+                return false;
+            }
+
+            launchPath =
+                shortcutTargetPath;
+        }
+
+        string extension =
+            Path.GetExtension(
+                launchPath);
+
+        if (string.Equals(
+                extension,
+                ".bat",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                extension,
+                ".cmd",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return File.Exists(
+                Path.Combine(
+                    Environment.SystemDirectory,
+                    "cmd.exe"));
+        }
+
+        try
+        {
+            ProcessStartInfo startInfo =
+                new(
+                    launchPath)
+                {
+                    UseShellExecute =
+                        true
+                };
+
+            return startInfo.Verbs.Any(
+                verb =>
+                    string.Equals(
+                        verb,
+                        "runas",
+                        StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void StartDockItemAsAdministrator_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            menuItem.Tag is not DockItem item ||
+            !CanStartDockItemAsAdministrator(
+                item))
+        {
+            return;
+        }
+
+        LaunchDockItemAsAdministrator(
+            item);
+    }
+
+    private static void LaunchDockItemAsAdministrator(
+        DockItem item)
+    {
+        try
+        {
+            string launchPath =
+                item.Path;
+
+            string arguments =
+                string.Empty;
+
+            string? workingDirectory =
+                Path.GetDirectoryName(
+                    item.Path);
+
+            if (item.Path.EndsWith(
+                    ".lnk",
+                    StringComparison.OrdinalIgnoreCase) &&
+                ShellIcon.TryGetShortcutLaunchInfo(
+                    item.Path,
+                    out string shortcutTargetPath,
+                    out string shortcutArguments,
+                    out string shortcutWorkingDirectory))
+            {
+                launchPath =
+                    shortcutTargetPath;
+
+                arguments =
+                    shortcutArguments;
+
+                if (!string.IsNullOrWhiteSpace(
+                        shortcutWorkingDirectory))
+                {
+                    workingDirectory =
+                        shortcutWorkingDirectory;
+                }
+                else
+                {
+                    workingDirectory =
+                        Path.GetDirectoryName(
+                            launchPath);
+                }
+            }
+
+            string extension =
+                Path.GetExtension(
+                    launchPath);
+
+            ProcessStartInfo startInfo;
+
+            if (string.Equals(
+                    extension,
+                    ".bat",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    extension,
+                    ".cmd",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                string commandProcessorPath =
+                    Path.Combine(
+                        Environment.SystemDirectory,
+                        "cmd.exe");
+
+                string scriptArguments =
+                    string.IsNullOrWhiteSpace(
+                        arguments)
+                        ? $"\"\"{launchPath}\"\""
+                        : $"\"\"{launchPath}\" {arguments}\"";
+
+                startInfo =
+                    new()
+                    {
+                        FileName =
+                            commandProcessorPath,
+                        Arguments =
+                            $"/d /s /c {scriptArguments}",
+                        Verb =
+                            "runas",
+                        UseShellExecute =
+                            true
+                    };
+            }
+            else
+            {
+                startInfo =
+                    new()
+                    {
+                        FileName =
+                            launchPath,
+                        Arguments =
+                            arguments,
+                        Verb =
+                            "runas",
+                        UseShellExecute =
+                            true
+                    };
+            }
+
+            if (!string.IsNullOrWhiteSpace(
+                    workingDirectory))
+            {
+                startInfo.WorkingDirectory =
+                    workingDirectory;
+            }
+
+            Process.Start(
+                startInfo);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.WriteException(
+                "LaunchAsAdministrator",
+                ex);
+
+            MessageBox.Show(
+                $"{App.Language["Message.LaunchFailed"]}\n\n{item.Path}\n\n{ex.Message}",
+                App.Language["App.Name"],
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private static void LaunchDockItem(
@@ -3232,14 +10020,49 @@ public partial class MainWindow : Window
             return;
         }
 
+        bool fadeAnimation =
+            !string.Equals(
+                _settings.AnimationStyle,
+                "Slide",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                _settings.AnimationStyle,
+                "Zoom",
+                StringComparison.OrdinalIgnoreCase);
+
         _zoomHoverUnlockTimer.Stop();
+        _expandHoverStabilizeTimer.Stop();
+        _expandHoverStabilizeTimer.Start();
         _collapseAnimationRunning = false;
+
+        _slideExpandPreparing =
+            string.Equals(
+                _settings.AnimationStyle,
+                "Slide",
+                StringComparison.OrdinalIgnoreCase);
+
+        DockContentGrid.BeginAnimation(
+            OpacityProperty,
+            null);
+
+        DockContentGrid.Opacity = 1;
+        DockContentGrid.RenderTransform = Transform.Identity;
+        DockContentGrid.CacheMode = null;
 
         DockChrome.BeginAnimation(
             OpacityProperty,
             null);
 
-        DockChrome.RenderTransform = Transform.Identity;
+        if (fadeAnimation)
+        {
+            DockChrome.Opacity = 0;
+            _nativeBackdropHost.SetOpacity(0);
+        }
+        else
+        {
+            DockChrome.Opacity = 1;
+            _nativeBackdropHost.SetOpacity(1);
+        }
 
         _isExpanded = true;
 
@@ -3260,7 +10083,12 @@ public partial class MainWindow : Window
                     0.60,
                     2.00));
 
+        UpdateWindowBounds();
+        UpdateLayout();
+
         ApplyAppearance();
+        UpdateLayout();
+
         PlayExpandAnimation();
     }
 
@@ -3294,6 +10122,12 @@ public partial class MainWindow : Window
 
     private void CompleteCollapse()
     {
+        if (_settings.CollapseDisabled)
+        {
+            Expand();
+            return;
+        }
+
         bool wasAnimatedCollapse =
             _collapseAnimationRunning;
 
@@ -3303,12 +10137,13 @@ public partial class MainWindow : Window
         LogRootState(
             "Complete collapse");
 
-        DockChrome.BeginAnimation(
+        DockContentGrid.BeginAnimation(
             OpacityProperty,
             null);
 
-        DockChrome.Opacity = 1;
-        DockChrome.RenderTransform = Transform.Identity;
+        DockContentGrid.Opacity = 1;
+        DockContentGrid.RenderTransform = Transform.Identity;
+        DockContentGrid.CacheMode = null;
 
         DockContentGrid.Visibility =
             Visibility.Collapsed;
@@ -3335,6 +10170,73 @@ public partial class MainWindow : Window
         }
     }
 
+    private void StartBackdropOpacitySync(
+        string phase)
+    {
+        if (_syncBackdropOpacityWithDockChrome)
+        {
+            StopBackdropOpacitySync();
+        }
+
+        _backdropOpacitySyncPhase =
+            phase;
+
+        _backdropOpacitySyncFrame =
+            0;
+
+        _syncBackdropOpacityWithDockChrome =
+            true;
+
+        DebugLog.Write(
+            "Fade",
+            $"START Phase={_backdropOpacitySyncPhase}; DockChromeOpacity={DockChrome.Opacity:0.000}");
+
+        CompositionTarget.Rendering +=
+            BackdropOpacitySync_Rendering;
+    }
+
+    private void StopBackdropOpacitySync()
+    {
+        if (!_syncBackdropOpacityWithDockChrome)
+        {
+            return;
+        }
+
+        CompositionTarget.Rendering -=
+            BackdropOpacitySync_Rendering;
+
+        DebugLog.Write(
+            "Fade",
+            $"STOP Phase={_backdropOpacitySyncPhase}; Frames={_backdropOpacitySyncFrame}; DockChromeOpacity={DockChrome.Opacity:0.000}");
+
+        _syncBackdropOpacityWithDockChrome =
+            false;
+
+        _backdropOpacitySyncPhase =
+            string.Empty;
+    }
+
+    private void BackdropOpacitySync_Rendering(
+        object? sender,
+        EventArgs e)
+    {
+        double dockChromeOpacity =
+            Math.Clamp(
+                DockChrome.Opacity,
+                0,
+                1);
+
+        bool nativeBackdropUpdated =
+            _nativeBackdropHost.SetOpacity(
+                dockChromeOpacity);
+
+        _backdropOpacitySyncFrame++;
+
+        DebugLog.Write(
+            "Fade",
+            $"FRAME Phase={_backdropOpacitySyncPhase}; Frame={_backdropOpacitySyncFrame}; DockChromeOpacity={dockChromeOpacity:0.000}; NativeBackdropRequestedOpacity={dockChromeOpacity:0.000}; NativeBackdropUpdateSucceeded={nativeBackdropUpdated}");
+    }
+
     private void PlayExpandAnimation()
     {
         string animationStyle =
@@ -3343,79 +10245,171 @@ public partial class MainWindow : Window
         TimeSpan duration =
             TimeSpan.FromMilliseconds(180);
 
+        StopBackdropOpacitySync();
+
+        DockContentGrid.BeginAnimation(
+            OpacityProperty,
+            null);
+
+        DockContentGrid.Opacity = 1;
+        DockContentGrid.RenderTransform = Transform.Identity;
+        DockContentGrid.RenderTransformOrigin =
+            new Point(0.5, 0.5);
+        DockContentGrid.CacheMode = null;
+
         DockChrome.BeginAnimation(
             OpacityProperty,
             null);
 
-        DockChrome.RenderTransform =
-            Transform.Identity;
-
-        DockChrome.RenderTransformOrigin =
-            new Point(0.5, 0.5);
+        DockChrome.Opacity = 1;
 
         switch (animationStyle)
         {
             case "Slide":
             {
-                TranslateTransform transform =
-                    new();
+                double startLeft =
+                    Left;
 
-                DockChrome.CacheMode =
-                    new BitmapCache
-                    {
-                        SnapsToDevicePixels = true
-                    };
+                double startTop =
+                    Top;
 
-                DockChrome.RenderTransform =
-                    transform;
+                double barThickness =
+                    Math.Clamp(
+                        _settings.BarThickness,
+                        2,
+                        24);
 
-                double offset =
-                    _settings.Edge switch
-                    {
-                        DockEdge.Left => -24,
-                        DockEdge.Right => 24,
-                        DockEdge.Top => -24,
-                        _ => 24
-                    };
+                double travel =
+                    _settings.Edge is
+                        DockEdge.Left or
+                        DockEdge.Right
+                        ? Math.Max(
+                            0,
+                            Width - barThickness)
+                        : Math.Max(
+                            0,
+                            Height - barThickness);
 
-                DoubleAnimation animation =
-                    new(
-                        offset,
-                        0,
-                        new Duration(
-                            TimeSpan.FromMilliseconds(
-                                220)))
-                    {
-                        FillBehavior =
-                            FillBehavior.Stop,
-                        EasingFunction =
-                            new CubicEase
-                            {
-                                EasingMode =
-                                    EasingMode.EaseInOut
-                            }
-                    };
+                double targetLeft =
+                    startLeft;
 
-                animation.Completed +=
-                    (_, _) =>
-                    {
-                        DockChrome.RenderTransform =
-                            Transform.Identity;
+                double targetTop =
+                    startTop;
 
-                        DockChrome.CacheMode =
-                            null;
-                    };
-
-                if (_settings.Edge is DockEdge.Left or DockEdge.Right)
+                switch (_settings.Edge)
                 {
-                    transform.BeginAnimation(
-                        TranslateTransform.XProperty,
+                    case DockEdge.Left:
+                        targetLeft +=
+                            travel;
+                        break;
+
+                    case DockEdge.Right:
+                        targetLeft -=
+                            travel;
+                        break;
+
+                    case DockEdge.Top:
+                        targetTop +=
+                            travel;
+                        break;
+
+                    default:
+                        targetTop -=
+                            travel;
+                        break;
+                }
+
+                _slideExpandPreparing =
+                    false;
+
+                if (_settings.Edge is
+                    DockEdge.Left or
+                    DockEdge.Right)
+                {
+                    BeginAnimation(
+                        LeftProperty,
+                        null);
+
+                    Left =
+                        startLeft;
+
+                    DoubleAnimation animation =
+                        new(
+                            startLeft,
+                            targetLeft,
+                            new Duration(
+                                TimeSpan.FromMilliseconds(
+                                    220)))
+                        {
+                            FillBehavior =
+                                FillBehavior.HoldEnd,
+                            EasingFunction =
+                                new CubicEase
+                                {
+                                    EasingMode =
+                                        EasingMode.EaseInOut
+                                }
+                        };
+
+                    animation.Completed +=
+                        (_, _) =>
+                        {
+                            Left =
+                                targetLeft;
+
+                            BeginAnimation(
+                                LeftProperty,
+                                null);
+
+                            _nativeBackdropHost.Sync();
+                        };
+
+                    BeginAnimation(
+                        LeftProperty,
                         animation);
                 }
                 else
                 {
-                    transform.BeginAnimation(
-                        TranslateTransform.YProperty,
+                    BeginAnimation(
+                        TopProperty,
+                        null);
+
+                    Top =
+                        startTop;
+
+                    DoubleAnimation animation =
+                        new(
+                            startTop,
+                            targetTop,
+                            new Duration(
+                                TimeSpan.FromMilliseconds(
+                                    220)))
+                        {
+                            FillBehavior =
+                                FillBehavior.HoldEnd,
+                            EasingFunction =
+                                new CubicEase
+                                {
+                                    EasingMode =
+                                        EasingMode.EaseInOut
+                                }
+                        };
+
+                    animation.Completed +=
+                        (_, _) =>
+                        {
+                            Top =
+                                targetTop;
+
+                            BeginAnimation(
+                                TopProperty,
+                                null);
+
+                            _nativeBackdropHost.Sync();
+                        };
+
+                    BeginAnimation(
+                        TopProperty,
                         animation);
                 }
 
@@ -3424,12 +10418,15 @@ public partial class MainWindow : Window
 
             case "Zoom":
             {
+                _slideExpandPreparing =
+                    false;
+
                 ScaleTransform transform =
                     new(
                         0.92,
                         0.92);
 
-                DockChrome.RenderTransform =
+                DockContentGrid.RenderTransform =
                     transform;
 
                 DoubleAnimation scaleXAnimation =
@@ -3467,7 +10464,7 @@ public partial class MainWindow : Window
                 scaleYAnimation.Completed +=
                     (_, _) =>
                     {
-                        DockChrome.RenderTransform =
+                        DockContentGrid.RenderTransform =
                             Transform.Identity;
                     };
 
@@ -3484,7 +10481,17 @@ public partial class MainWindow : Window
 
             default:
             {
-                DockChrome.Opacity = 0;
+                _slideExpandPreparing =
+                    false;
+
+                DockChrome.Opacity =
+                    0;
+
+                _nativeBackdropHost.SetOpacity(
+                    0);
+
+                StartBackdropOpacitySync(
+                    "Expand");
 
                 DoubleAnimation animation =
                     new(
@@ -3493,7 +10500,7 @@ public partial class MainWindow : Window
                         new Duration(duration))
                     {
                         FillBehavior =
-                            FillBehavior.Stop,
+                            FillBehavior.HoldEnd,
                         EasingFunction =
                             new QuadraticEase
                             {
@@ -3505,11 +10512,17 @@ public partial class MainWindow : Window
                 animation.Completed +=
                     (_, _) =>
                     {
+                        StopBackdropOpacitySync();
+
+                        DockChrome.Opacity =
+                            1;
+
                         DockChrome.BeginAnimation(
                             OpacityProperty,
                             null);
 
-                        DockChrome.Opacity = 1;
+                        _nativeBackdropHost.SetOpacity(
+                            1);
                     };
 
                 DockChrome.BeginAnimation(
@@ -3529,81 +10542,163 @@ public partial class MainWindow : Window
         TimeSpan duration =
             TimeSpan.FromMilliseconds(150);
 
+        StopBackdropOpacitySync();
+
+        DockContentGrid.BeginAnimation(
+            OpacityProperty,
+            null);
+
+        DockContentGrid.Opacity = 1;
+        DockContentGrid.RenderTransform = Transform.Identity;
+        DockContentGrid.RenderTransformOrigin =
+            new Point(0.5, 0.5);
+        DockContentGrid.CacheMode = null;
+
         DockChrome.BeginAnimation(
             OpacityProperty,
             null);
 
-        DockChrome.RenderTransform =
-            Transform.Identity;
+        DockChrome.Opacity = 1;
 
-        DockChrome.RenderTransformOrigin =
-            new Point(0.5, 0.5);
+        _nativeBackdropHost.SetOpacity(
+            1);
 
         switch (animationStyle)
         {
             case "Slide":
             {
-                TranslateTransform transform =
-                    new();
+                double startLeft =
+                    Left;
 
-                DockChrome.CacheMode =
-                    new BitmapCache
-                    {
-                        SnapsToDevicePixels = true
-                    };
+                double startTop =
+                    Top;
 
-                DockChrome.RenderTransform =
-                    transform;
+                double barThickness =
+                    Math.Clamp(
+                        _settings.BarThickness,
+                        2,
+                        24);
 
-                double offset =
-                    _settings.Edge switch
-                    {
-                        DockEdge.Left => -24,
-                        DockEdge.Right => 24,
-                        DockEdge.Top => -24,
-                        _ => 24
-                    };
+                double travel =
+                    _settings.Edge is
+                        DockEdge.Left or
+                        DockEdge.Right
+                        ? Math.Max(
+                            0,
+                            Width - barThickness)
+                        : Math.Max(
+                            0,
+                            Height - barThickness);
 
-                DoubleAnimation animation =
-                    new(
-                        0,
-                        offset,
-                        new Duration(
-                            TimeSpan.FromMilliseconds(
-                                200)))
-                    {
-                        FillBehavior =
-                            FillBehavior.Stop,
-                        EasingFunction =
-                            new CubicEase
-                            {
-                                EasingMode =
-                                    EasingMode.EaseInOut
-                            }
-                    };
+                double targetLeft =
+                    startLeft;
 
-                animation.Completed +=
-                    (_, _) =>
-                    {
-                        DockChrome.RenderTransform =
-                            Transform.Identity;
+                double targetTop =
+                    startTop;
 
-                        DockChrome.CacheMode =
-                            null;
-
-                        CompleteCollapse();
-                    };
-
-                if (_settings.Edge is DockEdge.Left or DockEdge.Right)
+                switch (_settings.Edge)
                 {
-                    transform.BeginAnimation(
-                        TranslateTransform.XProperty,
+                    case DockEdge.Left:
+                        targetLeft -=
+                            travel;
+                        break;
+
+                    case DockEdge.Right:
+                        targetLeft +=
+                            travel;
+                        break;
+
+                    case DockEdge.Top:
+                        targetTop -=
+                            travel;
+                        break;
+
+                    default:
+                        targetTop +=
+                            travel;
+                        break;
+                }
+
+                if (_settings.Edge is
+                    DockEdge.Left or
+                    DockEdge.Right)
+                {
+                    BeginAnimation(
+                        LeftProperty,
+                        null);
+
+                    DoubleAnimation animation =
+                        new(
+                            startLeft,
+                            targetLeft,
+                            new Duration(
+                                TimeSpan.FromMilliseconds(
+                                    200)))
+                        {
+                            FillBehavior =
+                                FillBehavior.HoldEnd,
+                            EasingFunction =
+                                new CubicEase
+                                {
+                                    EasingMode =
+                                        EasingMode.EaseInOut
+                                }
+                        };
+
+                    animation.Completed +=
+                        (_, _) =>
+                        {
+                            CompleteCollapse();
+
+                            BeginAnimation(
+                                LeftProperty,
+                                null);
+
+                            _nativeBackdropHost.Sync();
+                        };
+
+                    BeginAnimation(
+                        LeftProperty,
                         animation);
                 }
                 else
                 {
-                    transform.BeginAnimation(
-                        TranslateTransform.YProperty,
+                    BeginAnimation(
+                        TopProperty,
+                        null);
+
+                    DoubleAnimation animation =
+                        new(
+                            startTop,
+                            targetTop,
+                            new Duration(
+                                TimeSpan.FromMilliseconds(
+                                    200)))
+                        {
+                            FillBehavior =
+                                FillBehavior.HoldEnd,
+                            EasingFunction =
+                                new CubicEase
+                                {
+                                    EasingMode =
+                                        EasingMode.EaseInOut
+                                }
+                        };
+
+                    animation.Completed +=
+                        (_, _) =>
+                        {
+                            CompleteCollapse();
+
+                            BeginAnimation(
+                                TopProperty,
+                                null);
+
+                            _nativeBackdropHost.Sync();
+                        };
+
+                    BeginAnimation(
+                        TopProperty,
                         animation);
                 }
 
@@ -3617,7 +10712,7 @@ public partial class MainWindow : Window
                         1.0,
                         1.0);
 
-                DockChrome.RenderTransform =
+                DockContentGrid.RenderTransform =
                     transform;
 
                 DoubleAnimation scaleXAnimation =
@@ -3655,7 +10750,7 @@ public partial class MainWindow : Window
                 scaleYAnimation.Completed +=
                     (_, _) =>
                     {
-                        DockChrome.RenderTransform =
+                        DockContentGrid.RenderTransform =
                             Transform.Identity;
 
                         CompleteCollapse();
@@ -3674,7 +10769,14 @@ public partial class MainWindow : Window
 
             default:
             {
-                DockChrome.Opacity = 1;
+                DockChrome.Opacity =
+                    1;
+
+                _nativeBackdropHost.SetOpacity(
+                    1);
+
+                StartBackdropOpacitySync(
+                    "Collapse");
 
                 DoubleAnimation animation =
                     new(
@@ -3683,7 +10785,7 @@ public partial class MainWindow : Window
                         new Duration(duration))
                     {
                         FillBehavior =
-                            FillBehavior.Stop,
+                            FillBehavior.HoldEnd,
                         EasingFunction =
                             new QuadraticEase
                             {
@@ -3695,13 +10797,25 @@ public partial class MainWindow : Window
                 animation.Completed +=
                     (_, _) =>
                     {
+                        StopBackdropOpacitySync();
+
+                        DockChrome.Opacity =
+                            0;
+
                         DockChrome.BeginAnimation(
                             OpacityProperty,
                             null);
 
-                        DockChrome.Opacity = 1;
+                        _nativeBackdropHost.SetOpacity(
+                            0);
 
                         CompleteCollapse();
+
+                        DockChrome.Opacity =
+                            1;
+
+                        _nativeBackdropHost.SetOpacity(
+                            1);
                     };
 
                 DockChrome.BeginAnimation(
@@ -3739,6 +10853,15 @@ public partial class MainWindow : Window
 
                     if (label is null)
                     {
+                        continue;
+                    }
+
+                    if (item is DockItem dockItem &&
+                        dockItem.IsWidget)
+                    {
+                        label.Visibility =
+                            Visibility.Collapsed;
+
                         continue;
                     }
 
@@ -3869,48 +10992,123 @@ public partial class MainWindow : Window
             58 +
             itemSpacing;
 
+        double horizontalItemHeight =
+            _settings.ShowItemLabels
+                ? 58
+                : 54;
+
+        double horizontalItemVerticalMargin =
+            _settings.ShowItemLabels
+                ? 3
+                : 0;
+
         Resources["DockItemWidth"] =
             itemWidth;
+
+        foreach (DockItem item in DockItems)
+        {
+            int slotSpan =
+                Math.Clamp(
+                    item.SlotSpan,
+                    1,
+                    4);
+
+            if (orientation ==
+                Orientation.Horizontal)
+            {
+                item.LayoutWidth =
+                    itemWidth *
+                    slotSpan;
+
+                item.LayoutHeight =
+                    horizontalItemHeight;
+            }
+            else
+            {
+                item.LayoutWidth =
+                    itemWidth;
+
+                item.LayoutHeight =
+                    (58 * slotSpan) +
+                    (itemSpacing *
+                     (slotSpan - 1));
+            }
+        }
 
         Resources["DockItemMargin"] =
             orientation == Orientation.Horizontal
                 ? new Thickness(
                     0,
-                    3,
+                    horizontalItemVerticalMargin,
                     0,
-                    3)
+                    horizontalItemVerticalMargin)
                 : new Thickness(
                     3,
                     itemSpacing / 2.0,
                     3,
                     itemSpacing / 2.0);
 
+        int maxColumns =
+            Math.Clamp(
+                _settings.RootMaxColumns,
+                1,
+                50);
+
+        bool itemsPanelChanged =
+            _itemsOrientation != orientation ||
+            !double.Equals(
+                _itemsPanelItemWidth,
+                itemWidth) ||
+            _itemsPanelMaxColumns !=
+            maxColumns;
+
         DebugLog.Write(
             "ItemLayout",
-            $"Root layout update; Edge={_settings.Edge}; Spacing={_settings.ItemSpacing:0.##}; EffectiveSpacing={itemSpacing:0.##}; ItemWidth={itemWidth:0.##}; Orientation={orientation}; ItemsPanelChanged={_itemsOrientation != orientation}");
+            $"Root layout update; Edge={_settings.Edge}; Spacing={_settings.ItemSpacing:0.##}; EffectiveSpacing={itemSpacing:0.##}; ItemWidth={itemWidth:0.##}; Orientation={orientation}; MaxColumns={maxColumns}; ItemsPanelChanged={itemsPanelChanged}");
 
-        if (_itemsOrientation == orientation)
+        if (itemsPanelChanged)
         {
-            return;
+            FrameworkElementFactory wrapPanelFactory =
+                new(
+                    typeof(WrapPanel));
+
+            wrapPanelFactory.SetValue(
+                WrapPanel.OrientationProperty,
+                orientation);
+
+            if (orientation ==
+                Orientation.Horizontal)
+            {
+                wrapPanelFactory.SetValue(
+                    FrameworkElement.WidthProperty,
+                    itemWidth *
+                    maxColumns);
+            }
+            else
+            {
+                wrapPanelFactory.SetValue(
+                    FrameworkElement.HeightProperty,
+                    itemWidth *
+                    maxColumns);
+            }
+
+            DockItemsControl.ItemsPanel =
+                new ItemsPanelTemplate(
+                    wrapPanelFactory);
+
+            _itemsPanelItemWidth =
+                itemWidth;
+
+            _itemsPanelMaxColumns =
+                maxColumns;
         }
-
-        FrameworkElementFactory stackPanelFactory =
-            new(
-                typeof(StackPanel));
-
-        stackPanelFactory.SetValue(
-            StackPanel.OrientationProperty,
-            orientation);
-
-        DockItemsControl.ItemsPanel =
-            new ItemsPanelTemplate(
-                stackPanelFactory);
 
         _itemsOrientation =
             orientation;
     }
 
-    private void UpdateWindowBounds()
+    private void UpdateWindowBounds(
+        bool preserveHorizontalLeft = false)
     {
         if (_windowHandle == 0)
         {
@@ -3969,10 +11167,40 @@ public partial class MainWindow : Window
             58 +
             itemSpacing;
 
+        int maxColumns =
+            Math.Clamp(
+                _settings.RootMaxColumns,
+                1,
+                50);
+
+        int occupiedSlots =
+            Math.Max(
+                1,
+                DockItems.Sum(
+                    item =>
+                        Math.Clamp(
+                            item.SlotSpan,
+                            1,
+                            4)));
+
+        int rowCount =
+            Math.Max(
+                1,
+                (int)Math.Ceiling(
+                    occupiedSlots /
+                    (double)maxColumns));
+
+        int visibleColumns =
+            Math.Max(
+                1,
+                Math.Min(
+                    occupiedSlots,
+                    maxColumns));
+
         double length =
             Math.Max(
                 MinimumLength * scale,
-                (DockItems.Count *
+                (visibleColumns *
                  itemSlotLength * scale) +
                 (DockPaddingLength * scale));
 
@@ -3988,23 +11216,56 @@ public partial class MainWindow : Window
         double thicknessScale =
             Math.Clamp(
                 _settings.DockThicknessScale,
-                0.50,
-                1.00);
+                0.30,
+                1.50);
+
+        double minimumContentThickness =
+            (vertical
+                ? itemSlotLength + 6
+                : _settings.ShowItemLabels
+                    ? ItemSlotLength
+                    : 56) *
+            scale;
 
         double expandedThickness =
-            (ItemSlotLength * scale) +
-            ((BaseExpandedThickness -
-              ItemSlotLength) *
-             scale *
-             thicknessScale);
+            Math.Max(
+                minimumContentThickness,
+                BaseExpandedThickness *
+                scale *
+                thicknessScale);
+
+        double additionalGridThickness =
+            vertical
+                ? itemSlotLength + 6
+                : _settings.ShowItemLabels
+                    ? ItemSlotLength
+                    : 54;
+
+        double expandedGridThickness =
+            expandedThickness +
+            ((rowCount - 1) *
+             additionalGridThickness *
+             scale);
+
+        double collapsedThickness =
+            Math.Clamp(
+                _settings.BarThickness,
+                2,
+                24);
+
+        bool keepExpandedSlideGeometry =
+            string.Equals(
+                _settings.AnimationStyle,
+                "Slide",
+                StringComparison.OrdinalIgnoreCase) &&
+            (!_isExpanded ||
+             _slideExpandPreparing);
 
         double thickness =
-            _isExpanded
-                ? expandedThickness
-                : Math.Clamp(
-                    _settings.BarThickness,
-                    2,
-                    24);
+            _isExpanded ||
+            keepExpandedSlideGeometry
+                ? expandedGridThickness
+                : collapsedThickness;
 
         double width =
             vertical
@@ -4031,6 +11292,14 @@ public partial class MainWindow : Window
                 0,
                 1);
 
+        double previousLeft =
+            Left;
+
+        bool preserveCurrentHorizontalLeft =
+            preserveHorizontalLeft ||
+            (!vertical &&
+             _widgetCompanionItems.Count > 0);
+
         double left;
         double top;
 
@@ -4055,8 +11324,16 @@ public partial class MainWindow : Window
 
             case DockEdge.Top:
                 left =
-                    workLeft +
-                    (availableTravel * ratio);
+                    preserveCurrentHorizontalLeft
+                        ? Math.Clamp(
+                            previousLeft,
+                            workLeft,
+                            Math.Max(
+                                workLeft,
+                                workRight -
+                                width))
+                        : workLeft +
+                          (availableTravel * ratio);
 
                 top =
                     workTop;
@@ -4064,13 +11341,56 @@ public partial class MainWindow : Window
 
             default:
                 left =
-                    workLeft +
-                    (availableTravel * ratio);
+                    preserveCurrentHorizontalLeft
+                        ? Math.Clamp(
+                            previousLeft,
+                            workLeft,
+                            Math.Max(
+                                workLeft,
+                                workRight -
+                                width))
+                        : workLeft +
+                          (availableTravel * ratio);
 
                 top =
                     workBottom -
                     height;
                 break;
+        }
+
+        if (keepExpandedSlideGeometry)
+        {
+            double hiddenDistance =
+                vertical
+                    ? Math.Max(
+                        0,
+                        width - collapsedThickness)
+                    : Math.Max(
+                        0,
+                        height - collapsedThickness);
+
+            switch (_settings.Edge)
+            {
+                case DockEdge.Left:
+                    left -=
+                        hiddenDistance;
+                    break;
+
+                case DockEdge.Right:
+                    left +=
+                        hiddenDistance;
+                    break;
+
+                case DockEdge.Top:
+                    top -=
+                        hiddenDistance;
+                    break;
+
+                default:
+                    top +=
+                        hiddenDistance;
+                    break;
+            }
         }
 
         Left = left;
@@ -4187,7 +11507,7 @@ public partial class MainWindow : Window
                     1);
 
         UpdateItemsOrientation();
-        UpdateWindowBounds();
+        ApplyAppearance();
     }
 
     private MonitorInfo GetCurrentMonitorInfo()
@@ -4223,6 +11543,9 @@ public partial class MainWindow : Window
     {
         _settings.DockItems =
             DockItems
+                .Where(
+                    item =>
+                        !item.IsRuntimeOnly)
                 .Select(CreateSettingsEntry)
                 .ToList();
 
@@ -4238,13 +11561,26 @@ public partial class MainWindow : Window
                 _windowHandle,
                 GwlExStyle);
 
+        long updatedStyle =
+            exStyle.ToInt64() |
+            WsExToolWindow;
+
+        if (_settings.AlwaysOnTop)
+        {
+            updatedStyle |=
+                WsExTopmost;
+        }
+        else
+        {
+            updatedStyle &=
+                ~WsExTopmost;
+        }
+
         SetWindowLongPtr(
             _windowHandle,
             GwlExStyle,
             new nint(
-                exStyle.ToInt64() |
-                WsExTopmost |
-                WsExToolWindow));
+                updatedStyle));
 
         EnsureDockTopmost();
     }
@@ -4256,10 +11592,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        Topmost =
+            _settings.AlwaysOnTop;
+
         bool result =
             SetWindowPos(
                 _windowHandle,
-                HwndTopmost,
+                _settings.AlwaysOnTop
+                    ? HwndTopmost
+                    : HwndNotTopmost,
                 0,
                 0,
                 0,
@@ -4269,9 +11610,11 @@ public partial class MainWindow : Window
                 SwpNoActivate |
                 SwpShowWindow);
 
+        _nativeBackdropHost.Sync();
+
         DebugLog.Write(
             "ZOrder",
-            $"Topmost restored; Success={result}; Edge={_settings.Edge}; Left={Left:0.0}; Top={Top:0.0}; Width={Width:0.0}; Height={Height:0.0}");
+            $"Topmost applied; Enabled={_settings.AlwaysOnTop}; Success={result}; Edge={_settings.Edge}; Left={Left:0.0}; Top={Top:0.0}; Width={Width:0.0}; Height={Height:0.0}");
     }
 
     private void ApplyGlassBackdrop()

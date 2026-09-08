@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -11,10 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GlueDock</AssemblyName>
     <RootNamespace>GlueDock</RootNamespace>
-    <Version>0.1.0-alpha.1</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
-    <InformationalVersion>0.1.0-alpha.1</InformationalVersion>
+    <Version>0.0.417-alpha.1</Version>
+    <AssemblyVersion>0.0.417.0</AssemblyVersion>
+    <FileVersion>0.0.417.0</FileVersion>
+    <InformationalVersion>0.0.417-alpha.1</InformationalVersion>
     <Authors>Daniel Capilla</Authors>
     <Company>Daniel Capilla</Company>
     <Product>GlueDock</Product>
@@ -23,36 +23,30 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\GlueDock.ico</ApplicationIcon>
   </PropertyGroup>
-<ItemGroup>
-    <Content Include="Resources\GlueDock.ico">
+  <ItemGroup>
+    <Content Include="LICENSE.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
-    <Content Include="Resources\GlueDock.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <Content Include="Resources\GlueDock_Settings_UnderConstruction.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <Content Include="Resources\ko-fi.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <Content Include="Resources\molotov.jpg">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
+
+    <Resource Include="Resources\GlueDock.ico" />
+    <Resource Include="Resources\GlueDock.png" />
+    <Resource Include="Resources\GlueDock_Settings_UnderConstruction.png" />
+    <Resource Include="Resources\ko-fi.png" />
+    <Resource Include="Resources\molotov.jpg" />
+
     <Content Include="Resources\GlueDock_Iconset\*.*">
       <Link>GlueDock_Iconset\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+
     <Content Include="Resources\GlueDock_Language\*.json">
+      <Link>GlueDock_Data\Languages\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+
     <Content Include="GlueDock_Themes\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
@@ -63,16 +57,85 @@
   <ItemGroup>
     <Compile Remove="GaussianBlurEffect.cs" />
     <Compile Remove="GraphicsEffectInterop.cs" />
+    <Compile Remove="IGlueDockWidget.cs" />
+    <Compile Remove="GlueDockWidgetContext.cs" />
+    <Compile Remove="GlueDock.ClockWidget\**\*.cs" />
+    <Compile Remove="GlueDock.DriveUsageWidget\**\*.cs" />
+    <Compile Remove="GlueDock.DesktopOverlayWidget\**\*.cs" />
+    <Compile Remove="GlueDock.WidgetApi\**\*.cs" />
+    <Compile Remove="WidgetSamples\**\*.cs" />
+    <Page Remove="GlueDock.ClockWidget\**\*.xaml" />
+    <Page Remove="GlueDock.DriveUsageWidget\**\*.xaml" />
+    <Page Remove="GlueDock.DesktopOverlayWidget\**\*.xaml" />
+    <Page Remove="WidgetSamples\**\*.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="GlueDock.WidgetApi\GlueDock.WidgetApi.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
     <NativeBlurX64Output>$(MSBuildProjectDirectory)\NativeBlurHost\bin\$(Configuration)\x64\GlueDock.NativeBlur.x64.dll</NativeBlurX64Output>
     <NativeBlurX86Output>$(MSBuildProjectDirectory)\NativeBlurHost\bin\$(Configuration)\Win32\GlueDock.NativeBlur.x86.dll</NativeBlurX86Output>
+    <BundledWidgetOutputRoot>$(MSBuildProjectDirectory)\bin\$(Configuration)\net10.0-windows10.0.19041.0\GlueDock_Widgets</BundledWidgetOutputRoot>
   </PropertyGroup>
+
+  <Target Name="ForceMainProjectRebuildForPublish"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(GlueDockPublishRebuild)' != 'false'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Rebuild"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);TargetFramework=$(TargetFramework);GlueDockPublishRebuild=false" />
+  </Target>
+
+  <Target Name="BuildBundledWidgets"
+          BeforeTargets="Publish">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\GlueDock.ClockWidget\GlueDock.ClockWidget.csproj;
+                       $(MSBuildProjectDirectory)\GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj;
+                       $(MSBuildProjectDirectory)\GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj"
+             Targets="Build"
+             BuildInParallel="true"
+             Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="PreparePublishedRuntimeFolders"
+          AfterTargets="Publish">
+    <MakeDir Directories="$(PublishDir)GlueDock_Data;
+                          $(PublishDir)GlueDock_Debug;
+                          $(PublishDir)GlueDock_Profiles;
+                          $(PublishDir)GlueDock_Repository;
+                          $(PublishDir)GlueDock_Repository\Icons;
+                          $(PublishDir)GlueDock_settings;
+                          $(PublishDir)GlueDock_Widgets" />
+  </Target>
+
+  <Target Name="CopyBundledWidgetsToPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="BuildBundledWidgets">
+    <ItemGroup>
+      <ClockWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.ClockWidget\**\*" />
+      <DesktopOverlayWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.DesktopOverlayWidget\**\*" />
+      <DriveUsageWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.DriveUsageWidget\**\*" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(ClockWidgetPublishFile)"
+          DestinationFiles="@(ClockWidgetPublishFile->'$(PublishDir)GlueDock_Widgets\GlueDock.ClockWidget\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+
+    <Copy SourceFiles="@(DesktopOverlayWidgetPublishFile)"
+          DestinationFiles="@(DesktopOverlayWidgetPublishFile->'$(PublishDir)GlueDock_Widgets\GlueDock.DesktopOverlayWidget\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+
+    <Copy SourceFiles="@(DriveUsageWidgetPublishFile)"
+          DestinationFiles="@(DriveUsageWidgetPublishFile->'$(PublishDir)GlueDock_Widgets\GlueDock.DriveUsageWidget\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
   <Target Name="EnsureNativeBlurHostExists"
           BeforeTargets="Build"
-          Condition="!Exists('$(NativeBlurX64Output)') Or !Exists('$(NativeBlurX86Output)')"
+          Inputs="$(MSBuildProjectDirectory)\NativeBlurHost\NativeBlurHost.cpp"
+          Outputs="$(NativeBlurX64Output);$(NativeBlurX86Output)"
           DependsOnTargets="BuildNativeBlurHostX64;BuildNativeBlurHostWin32" />
 
   <Target Name="BuildNativeBlurHost"
@@ -103,4 +166,16 @@
           Condition="Exists('$(NativeBlurX86Output)')" />
   </Target>
 
+  <Target Name="CopyNativeBlurHostToPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="EnsureNativeBlurHostExists">
+    <Copy SourceFiles="$(NativeBlurX64Output)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(NativeBlurX64Output)')" />
+    <Copy SourceFiles="$(NativeBlurX86Output)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(NativeBlurX86Output)')" />
+  </Target>
 </Project>

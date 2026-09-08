@@ -13,10 +13,115 @@ public static class ShellIcon
 {
     private const uint ShgfiIcon = 0x000000100;
     private const uint ShgfiLargeIcon = 0x000000000;
+    private const uint ShgfiPidl = 0x000000008;
 
     private const uint SiigbfBiggerSizeOk = 0x00000001;
     private const uint SiigbfThumbnailOnly = 0x00000008;
     private const uint SiigbfScaleUp = 0x00000100;
+
+    public static bool TryGetShortcutLaunchInfo(
+        string shortcutPath,
+        out string targetPath,
+        out string arguments,
+        out string workingDirectory)
+    {
+        targetPath =
+            string.Empty;
+
+        arguments =
+            string.Empty;
+
+        workingDirectory =
+            string.Empty;
+
+        if (string.IsNullOrWhiteSpace(
+                shortcutPath) ||
+            !shortcutPath.EndsWith(
+                ".lnk",
+                StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(
+                shortcutPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            ShellLink shellLink =
+                (ShellLink)new CShellLink();
+
+            IPersistFile persistFile =
+                (IPersistFile)shellLink;
+
+            persistFile.Load(
+                shortcutPath,
+                0);
+
+            shellLink.Resolve(
+                IntPtr.Zero,
+                0x0001 |
+                0x0008);
+
+            StringBuilder targetPathBuilder =
+                new(
+                    32768);
+
+            shellLink.GetPath(
+                targetPathBuilder,
+                targetPathBuilder.Capacity,
+                IntPtr.Zero,
+                0);
+
+            StringBuilder argumentsBuilder =
+                new(
+                    32768);
+
+            shellLink.GetArguments(
+                argumentsBuilder,
+                argumentsBuilder.Capacity);
+
+            StringBuilder workingDirectoryBuilder =
+                new(
+                    32768);
+
+            shellLink.GetWorkingDirectory(
+                workingDirectoryBuilder,
+                workingDirectoryBuilder.Capacity);
+
+            targetPath =
+                Environment.ExpandEnvironmentVariables(
+                    targetPathBuilder.ToString());
+
+            arguments =
+                Environment.ExpandEnvironmentVariables(
+                    argumentsBuilder.ToString());
+
+            workingDirectory =
+                Environment.ExpandEnvironmentVariables(
+                    workingDirectoryBuilder.ToString());
+
+            return
+                !string.IsNullOrWhiteSpace(
+                    targetPath);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.WriteException(
+                "Shortcut.Resolve",
+                ex);
+
+            targetPath =
+                string.Empty;
+
+            arguments =
+                string.Empty;
+
+            workingDirectory =
+                string.Empty;
+
+            return false;
+        }
+    }
 
     public static BitmapSource? GetIcon(
         string path)
@@ -33,16 +138,17 @@ public static class ShellIcon
         return GetIcon(
             path,
             useFilePreview,
-            useSmallShortcutOverlay: false);
+            DockSettings.ShortcutOverlayDefault);
     }
 
     public static BitmapSource? GetIcon(
         string path,
         bool useFilePreview,
-        bool useSmallShortcutOverlay)
+        string shortcutOverlayMode)
     {
         if (useFilePreview &&
-            System.IO.File.Exists(path) &&
+            (System.IO.File.Exists(path) ||
+             System.IO.Directory.Exists(path)) &&
             !path.EndsWith(
                 ".lnk",
                 StringComparison.OrdinalIgnoreCase))
@@ -58,22 +164,60 @@ public static class ShellIcon
             }
         }
 
-        if (useSmallShortcutOverlay &&
+        bool isInternetShortcut =
+            path.EndsWith(
+                ".url",
+                StringComparison.OrdinalIgnoreCase);
+
+        bool isShellShortcut =
             path.EndsWith(
                 ".lnk",
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.OrdinalIgnoreCase);
+
+        if (isInternetShortcut ||
+            isShellShortcut)
         {
-            BitmapSource? shortcutIcon =
-                GetShortcutIconWithSmallOverlay(
-                    path);
-
-            DebugLog.Write(
-                "ShortcutOverlay",
-                $"Path={path}; SmallOverlay=True; CustomIcon={(shortcutIcon is not null)}");
-
-            if (shortcutIcon is not null)
+            if (string.Equals(
+                    shortcutOverlayMode,
+                    DockSettings.ShortcutOverlayNone,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                return shortcutIcon;
+                BitmapSource? shortcutIcon =
+                    isInternetShortcut
+                        ? GetInternetShortcutBaseIcon(
+                            path)
+                        : GetShortcutTargetIcon(
+                            path);
+
+                DebugLog.Write(
+                    "ShortcutOverlay",
+                    $"Path={path}; Mode=None; CustomIcon={(shortcutIcon is not null)}; Type={(isInternetShortcut ? "URL" : "LNK")}");
+
+                if (shortcutIcon is not null)
+                {
+                    return shortcutIcon;
+                }
+            }
+            else if (string.Equals(
+                         shortcutOverlayMode,
+                         DockSettings.ShortcutOverlaySmall,
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                BitmapSource? shortcutIcon =
+                    isInternetShortcut
+                        ? GetInternetShortcutIconWithSmallOverlay(
+                            path)
+                        : GetShortcutIconWithSmallOverlay(
+                            path);
+
+                DebugLog.Write(
+                    "ShortcutOverlay",
+                    $"Path={path}; Mode=Small; CustomIcon={(shortcutIcon is not null)}; Type={(isInternetShortcut ? "URL" : "LNK")}");
+
+                if (shortcutIcon is not null)
+                {
+                    return shortcutIcon;
+                }
             }
         }
 
@@ -156,6 +300,161 @@ public static class ShellIcon
         }
     }
 
+    private static BitmapSource? GetInternetShortcutIconWithSmallOverlay(
+        string path)
+    {
+        BitmapSource? baseIcon =
+            GetInternetShortcutBaseIcon(
+                path);
+
+        BitmapSource? overlayIcon =
+            GetLinkOverlayIcon();
+
+        if (baseIcon is null ||
+            overlayIcon is null)
+        {
+            return null;
+        }
+
+        const double overlayScale = 0.50;
+
+        double width =
+            baseIcon.PixelWidth;
+
+        double height =
+            baseIcon.PixelHeight;
+
+        double overlayWidth =
+            Math.Max(
+                1,
+                width *
+                overlayScale);
+
+        double overlayHeight =
+            Math.Max(
+                1,
+                height *
+                overlayScale);
+
+        DrawingVisual visual =
+            new();
+
+        using (DrawingContext drawingContext =
+               visual.RenderOpen())
+        {
+            drawingContext.DrawImage(
+                baseIcon,
+                new Rect(
+                    0,
+                    0,
+                    width,
+                    height));
+
+            drawingContext.DrawImage(
+                overlayIcon,
+                new Rect(
+                    0,
+                    height - overlayHeight,
+                    overlayWidth,
+                    overlayHeight));
+        }
+
+        RenderTargetBitmap result =
+            new(
+                baseIcon.PixelWidth,
+                baseIcon.PixelHeight,
+                96,
+                96,
+                PixelFormats.Pbgra32);
+
+        result.Render(
+            visual);
+
+        result.Freeze();
+
+        return result;
+    }
+
+    private static BitmapSource? GetInternetShortcutBaseIcon(
+        string path)
+    {
+        try
+        {
+            string? iconFile =
+                null;
+
+            int iconIndex =
+                0;
+
+            foreach (string line
+                     in File.ReadLines(
+                         path))
+            {
+                if (line.StartsWith(
+                        "IconFile=",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    iconFile =
+                        Environment.ExpandEnvironmentVariables(
+                            line[
+                                "IconFile=".Length..]
+                                .Trim());
+
+                    continue;
+                }
+
+                if (line.StartsWith(
+                        "IconIndex=",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    int.TryParse(
+                        line[
+                            "IconIndex=".Length..]
+                            .Trim(),
+                        out iconIndex);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(
+                    iconFile) &&
+                File.Exists(
+                    iconFile))
+            {
+                BitmapSource? extractedIcon =
+                    ExtractIcon(
+                        iconFile,
+                        iconIndex);
+
+                if (extractedIcon is not null)
+                {
+                    DebugLog.Write(
+                        "ShortcutOverlay",
+                        $"URL base icon from IconFile; Shortcut={path}; IconFile={iconFile}; IconIndex={iconIndex}; Size={extractedIcon.PixelWidth}x{extractedIcon.PixelHeight}");
+
+                    return extractedIcon;
+                }
+            }
+
+            BitmapSource? shellIcon =
+                GetShellIcon(
+                    path);
+
+            DebugLog.Write(
+                "ShortcutOverlay",
+                $"URL base icon fallback from shell; Shortcut={path}; IconFile={iconFile}; Size={(shellIcon is not null ? $"{shellIcon.PixelWidth}x{shellIcon.PixelHeight}" : "n/a")}");
+
+            return shellIcon;
+        }
+        catch (Exception ex)
+        {
+            DebugLog.WriteException(
+                "ShortcutOverlay.URL",
+                ex);
+
+            return null;
+        }
+    }
+
     private static BitmapSource? GetShortcutIconWithSmallOverlay(
         string path)
     {
@@ -183,13 +482,13 @@ public static class ShellIcon
         double overlayWidth =
             Math.Max(
                 1,
-                overlayIcon.PixelWidth *
+                width *
                 overlayScale);
 
         double overlayHeight =
             Math.Max(
                 1,
-                overlayIcon.PixelHeight *
+                height *
                 overlayScale);
 
         DrawingVisual visual =
@@ -272,8 +571,14 @@ public static class ShellIcon
                 Environment.ExpandEnvironmentVariables(
                     iconPathBuilder.ToString());
 
+            bool iconPathIsShortcut =
+                iconPath.EndsWith(
+                    ".lnk",
+                    StringComparison.OrdinalIgnoreCase);
+
             if (!string.IsNullOrWhiteSpace(
                     iconPath) &&
+                !iconPathIsShortcut &&
                 File.Exists(
                     iconPath))
             {
@@ -284,6 +589,10 @@ public static class ShellIcon
 
                 if (extractedIcon is not null)
                 {
+                    DebugLog.Write(
+                        "ShortcutOverlay",
+                        $"Base icon from IconLocation; Shortcut={path}; IconPath={iconPath}; IconIndex={iconIndex}; Size={extractedIcon.PixelWidth}x{extractedIcon.PixelHeight}");
+
                     return extractedIcon;
                 }
             }
@@ -295,8 +604,45 @@ public static class ShellIcon
             if (!string.IsNullOrWhiteSpace(
                     targetPath))
             {
-                return GetShellIcon(
-                    targetPath);
+                BitmapSource? targetIcon =
+                    GetShellIcon(
+                        targetPath);
+
+                DebugLog.Write(
+                    "ShortcutOverlay",
+                    $"Base icon from target; Shortcut={path}; Target={targetPath}; IconPath={iconPath}; IconPathIsShortcut={iconPathIsShortcut}; Size={(targetIcon is not null ? $"{targetIcon.PixelWidth}x{targetIcon.PixelHeight}" : "n/a")}");
+
+                if (targetIcon is not null)
+                {
+                    return targetIcon;
+                }
+            }
+
+            shellLink.GetIDList(
+                out IntPtr targetPidl);
+
+            if (targetPidl != IntPtr.Zero)
+            {
+                try
+                {
+                    BitmapSource? targetIcon =
+                        GetShellIconFromPidl(
+                            targetPidl);
+
+                    DebugLog.Write(
+                        "ShortcutOverlay",
+                        $"Base icon from target PIDL; Shortcut={path}; Size={(targetIcon is not null ? $"{targetIcon.PixelWidth}x{targetIcon.PixelHeight}" : "n/a")}");
+
+                    if (targetIcon is not null)
+                    {
+                        return targetIcon;
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeCoTaskMem(
+                        targetPidl);
+                }
             }
         }
         catch
@@ -383,6 +729,44 @@ public static class ShellIcon
         return null;
     }
 
+    private static BitmapSource? GetShellIconFromPidl(
+        IntPtr pidl)
+    {
+        ShFileInfo fileInfo = new();
+
+        nint result = SHGetFileInfo(
+            pidl,
+            0,
+            ref fileInfo,
+            (uint)Marshal.SizeOf<ShFileInfo>(),
+            ShgfiIcon |
+            ShgfiLargeIcon |
+            ShgfiPidl);
+
+        if (result == 0 ||
+            fileInfo.hIcon == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            BitmapSource source =
+                Imaging.CreateBitmapSourceFromHIcon(
+                    fileInfo.hIcon,
+                    Int32Rect.Empty,
+                    BitmapSizeOptions.FromEmptyOptions());
+
+            source.Freeze();
+            return source;
+        }
+        finally
+        {
+            DestroyIcon(
+                fileInfo.hIcon);
+        }
+    }
+
     private static BitmapSource? GetShellIcon(
         string path)
     {
@@ -455,6 +839,14 @@ public static class ShellIcon
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern nint SHGetFileInfo(
         string pszPath,
+        uint dwFileAttributes,
+        ref ShFileInfo psfi,
+        uint cbFileInfo,
+        uint uFlags);
+
+    [DllImport("shell32.dll")]
+    private static extern nint SHGetFileInfo(
+        IntPtr pidl,
         uint dwFileAttributes,
         ref ShFileInfo psfi,
         uint cbFileInfo,
