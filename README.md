@@ -51,6 +51,16 @@ You can start by copying an existing theme and modifying it to match your own st
 
 <br><br>
 
+<img width="605" height="82" alt="grafik" src="https://github.com/user-attachments/assets/2da4749d-c3a8-428b-9933-820be24fbbc4" />
+
+
+<br><br>
+
+<img width="607" height="79" alt="grafik" src="https://github.com/user-attachments/assets/52cd5741-5e65-4007-835d-38b335b9577b" />
+
+
+<br><br>
+
 <img width="836" height="172" alt="grafik" src="https://github.com/user-attachments/assets/3327214e-96ea-496d-a7d7-23456f4e573a" />
 
 
