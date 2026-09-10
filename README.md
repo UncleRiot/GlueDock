@@ -1,4 +1,4 @@
-<img width="1086" height="362" alt="Gluedock_big" src="https://github.com/user-attachments/assets/55573e2d-80e6-40f3-a3a1-9efbe5b134fc" />
+<img width="543" height="181" alt="Gluedock_big" src="https://github.com/user-attachments/assets/55573e2d-80e6-40f3-a3a1-9efbe5b134fc" />
 
 
 
@@ -8,13 +8,56 @@
 
 
 Customize it for you everyday needs!
-... comming soon... 
-
-Be part of the development, post feature-requests, bugs, skins, icons, everything under:
-Customize it for you everyday need!
 
 [🐞 Issues](https://github.com/UncleRiot/GlueDock/issues)  
 [💬 Discussions](https://github.com/UncleRiot/GlueDock/discussions)
+
+
+## 🎨 Theme Development
+
+GlueDock supports fully customizable themes, including animated gradients, glowing particles, stars, flame effects and advanced glass styling.
+
+Create anything from a subtle animated background to a full dynamic fireplace-style dock.
+
+### What you can customize
+
+- Animated gradient backgrounds
+- Rotating glass gradients
+- Glow and star particle effects
+- Animated flame effects
+- Colors, transparency and highlights
+- Blur and glow intensity
+- Particle density and movement
+- Animation speed and timing
+- Deterministic layouts using seeds
+
+### Start creating your own themes
+
+The full guide includes three examples from simple to advanced:
+
+1. Simple animated gradient
+2. Rotating gradient with glowing stars
+3. Animated fireplace theme
+
+It also explains important theme properties, performance considerations and troubleshooting.
+
+👉 **[Creating Animated Themes](docs/CREATING-THEMES.md)**
+
+Custom themes are stored in:
+
+`GlueDock_Themes`
+
+You can start by copying an existing theme and modifying it to match your own style.
+
+<br><br>
+
+<img width="605" height="82" alt="grafik" src="https://github.com/user-attachments/assets/2da4749d-c3a8-428b-9933-820be24fbbc4" />
+
+
+<br><br>
+
+<img width="607" height="79" alt="grafik" src="https://github.com/user-attachments/assets/52cd5741-5e65-4007-835d-38b335b9577b" />
+
 
 <br><br>
 
@@ -50,17 +93,17 @@ Customize it for you everyday need!
 
 <img width="438" height="173" alt="grafik" src="https://github.com/user-attachments/assets/429951bb-ab24-49a3-89a8-ecb4b0a7fec1" />
 
-Windows SmartScreen may block c² flux because the application is not yet widely recognized.
+Windows SmartScreen may block GlueDock because the application is not yet widely recognized.
 
 This warning does not automatically mean that the application is malicious.
 
-Only continue if you downloaded c² flux from the official GitHub repository.
+Only continue if you downloaded GlueDock from the official GitHub repository.
 
-### How to start GlueDock flux
+### How to start GlueDock
 
 1. Click **More info**.
 2. Click **Run anyway**.
 3. Confirm the Windows security prompt, if one appears.
-4. GlueDock flux will start.
+4. GlueDock will start.
 
 > **Important:** Do not run the application if you downloaded it from an unknown or untrusted source.
