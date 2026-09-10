@@ -4,4 +4,5 @@
   <Project Path="GlueDock.ClockWidget\GlueDock.ClockWidget.csproj" />
   <Project Path="GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj" />
   <Project Path="GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj" />
+  <Project Path="GlueDock.GlueNotesWidget\GlueNotes.csproj" />
 </Solution>

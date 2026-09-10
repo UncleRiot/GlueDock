@@ -2334,7 +2334,8 @@ public partial class MainWindow : Window
     {
         if (sender is not MenuItem menuItem ||
             menuItem.Tag is not DockItem item ||
-            !item.IsSubmenu)
+            item.IsRuntimeOnly ||
+            item.IsWidget)
         {
             return;
         }
@@ -2393,7 +2394,8 @@ public partial class MainWindow : Window
     {
         if (sender is not MenuItem menuItem ||
             menuItem.Tag is not DockItem item ||
-            !item.IsSubmenu)
+            item.IsRuntimeOnly ||
+            item.IsWidget)
         {
             return;
         }
@@ -2402,8 +2404,13 @@ public partial class MainWindow : Window
             string.Empty;
 
         item.Icon =
-            SubmenuIcon.Create(
-                _settings);
+            item.IsSubmenu
+                ? SubmenuIcon.Create(
+                    _settings)
+                : ShellIcon.GetIcon(
+                    item.Path,
+                    _settings.ShowFilePreviews,
+                    _settings.ShortcutOverlayMode);
 
         SaveSettings();
     }
@@ -2547,33 +2554,13 @@ public partial class MainWindow : Window
         _collapseTimer.Stop();
         _openSubDock?.Close();
 
-        System.Windows.Rect anchorRect;
+        System.Windows.Rect anchorRect =
+            GetScreenRect(
+                anchor);
 
         DpiScale anchorDpi =
             VisualTreeHelper.GetDpi(
-                this);
-
-        if (_settings.Edge is
-            DockEdge.Top or
-            DockEdge.Bottom)
-        {
-            anchorRect =
-                new System.Windows.Rect(
-                    Left,
-                    Top,
-                    ActualWidth > 0
-                        ? ActualWidth
-                        : Width,
-                    ActualHeight > 0
-                        ? ActualHeight
-                        : Height);
-        }
-        else
-        {
-            anchorRect =
-                GetScreenRect(
-                    anchor);
-        }
+                anchor);
 
         _openSubDock =
             new SubDockWindow(
@@ -3239,6 +3226,7 @@ public partial class MainWindow : Window
             menuItem.IsChecked;
 
         ApplyNativeWindowStyle();
+        _openSubDock?.ApplySettingsLive();
         SaveSettings();
 
         DebugLog.Write(
@@ -3484,22 +3472,17 @@ public partial class MainWindow : Window
         UpdateWindowBounds();
         UpdateItemLabelVisibility();
 
-        if (_openSubDock?.IsVisible == true)
+        if (_openSubDock?.IsVisible == true &&
+            _hoverSubmenuAnchor is not null &&
+            _hoverSubmenuAnchor.IsVisible)
         {
             DpiScale anchorDpi =
                 VisualTreeHelper.GetDpi(
-                    this);
+                    _hoverSubmenuAnchor);
 
             System.Windows.Rect anchorRect =
-                new(
-                    Left,
-                    Top,
-                    ActualWidth > 0
-                        ? ActualWidth
-                        : Width,
-                    ActualHeight > 0
-                        ? ActualHeight
-                        : Height);
+                GetScreenRect(
+                    _hoverSubmenuAnchor);
 
             _openSubDock.ApplyItemSpacingLive(
                 anchorRect,
@@ -3593,24 +3576,16 @@ public partial class MainWindow : Window
         {
             _openSubDock.ApplySettingsLive();
 
-            if (_settings.Edge is
-                DockEdge.Top or
-                DockEdge.Bottom)
+            if (_hoverSubmenuAnchor is not null &&
+                _hoverSubmenuAnchor.IsVisible)
             {
                 DpiScale anchorDpi =
                     VisualTreeHelper.GetDpi(
-                        this);
+                        _hoverSubmenuAnchor);
 
                 System.Windows.Rect anchorRect =
-                    new(
-                        Left,
-                        Top,
-                        ActualWidth > 0
-                            ? ActualWidth
-                            : Width,
-                        ActualHeight > 0
-                            ? ActualHeight
-                            : Height);
+                    GetScreenRect(
+                        _hoverSubmenuAnchor);
 
                 _openSubDock.PositionNextTo(
                     anchorRect,
@@ -3704,10 +3679,17 @@ public partial class MainWindow : Window
                 ? SubmenuIcon.Create(
                     _settings,
                     item.SubmenuIconRepositoryPath)
-                : ShellIcon.GetIcon(
-                    item.Path,
-                    _settings.ShowFilePreviews,
-                    _settings.ShortcutOverlayMode);
+                : item.IsWidget
+                    ? item.Icon
+                    : !string.IsNullOrWhiteSpace(
+                          item.SubmenuIconRepositoryPath)
+                        ? SubmenuIcon.Create(
+                            _settings,
+                            item.SubmenuIconRepositoryPath)
+                        : ShellIcon.GetIcon(
+                            item.Path,
+                            _settings.ShowFilePreviews,
+                            _settings.ShortcutOverlayMode);
 
         foreach (DockItem child in item.Children)
         {
@@ -9716,10 +9698,15 @@ public partial class MainWindow : Window
                             entry.SubmenuIconRepositoryPath ?? string.Empty)
                         : isWidget
                             ? null
-                            : ShellIcon.GetIcon(
-                                path,
-                                _settings.ShowFilePreviews,
-                                _settings.ShortcutOverlayMode)
+                            : !string.IsNullOrWhiteSpace(
+                                  entry.SubmenuIconRepositoryPath)
+                                ? SubmenuIcon.Create(
+                                    _settings,
+                                    entry.SubmenuIconRepositoryPath)
+                                : ShellIcon.GetIcon(
+                                    path,
+                                    _settings.ShowFilePreviews,
+                                    _settings.ShortcutOverlayMode)
             };
 
         foreach (DockEntrySettings child in entry.Children ?? [])

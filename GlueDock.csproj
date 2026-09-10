@@ -11,10 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GlueDock</AssemblyName>
     <RootNamespace>GlueDock</RootNamespace>
-    <Version>0.0.417-alpha.1</Version>
-    <AssemblyVersion>0.0.417.0</AssemblyVersion>
-    <FileVersion>0.0.417.0</FileVersion>
-    <InformationalVersion>0.0.417-alpha.1</InformationalVersion>
+    <Version>0.0.440-alpha.1</Version>
+    <AssemblyVersion>0.0.440.0</AssemblyVersion>
+    <FileVersion>0.0.440.0</FileVersion>
+    <InformationalVersion>0.0.440-alpha.1</InformationalVersion>
     <Authors>Daniel Capilla</Authors>
     <Company>Daniel Capilla</Company>
     <Product>GlueDock</Product>
@@ -64,10 +64,13 @@
     <Compile Remove="GlueDock.DesktopOverlayWidget\**\*.cs" />
     <Compile Remove="GlueDock.WidgetApi\**\*.cs" />
     <Compile Remove="WidgetSamples\**\*.cs" />
+    <Compile Remove="GlueDock.GlueNotesWidget\**\*.cs" />
     <Page Remove="GlueDock.ClockWidget\**\*.xaml" />
     <Page Remove="GlueDock.DriveUsageWidget\**\*.xaml" />
     <Page Remove="GlueDock.DesktopOverlayWidget\**\*.xaml" />
     <Page Remove="WidgetSamples\**\*.xaml" />
+    <Page Remove="GlueDock.GlueNotesWidget\**\*.xaml" />
+    <ApplicationDefinition Remove="GlueDock.GlueNotesWidget\**\*.xaml" />
   </ItemGroup>
 
   <ItemGroup>
@@ -93,7 +96,8 @@
           BeforeTargets="Publish">
     <MSBuild Projects="$(MSBuildProjectDirectory)\GlueDock.ClockWidget\GlueDock.ClockWidget.csproj;
                        $(MSBuildProjectDirectory)\GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj;
-                       $(MSBuildProjectDirectory)\GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj"
+                       $(MSBuildProjectDirectory)\GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj;
+                       $(MSBuildProjectDirectory)\GlueDock.GlueNotesWidget\GlueNotes.csproj"
              Targets="Build"
              BuildInParallel="true"
              Properties="Configuration=$(Configuration)" />
@@ -117,6 +121,7 @@
       <ClockWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.ClockWidget\**\*" />
       <DesktopOverlayWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.DesktopOverlayWidget\**\*" />
       <DriveUsageWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.DriveUsageWidget\**\*" />
+      <GlueNotesPublishFile Include="$(BundledWidgetOutputRoot)\GlueNotes\**\*" />
     </ItemGroup>
 
     <Copy SourceFiles="@(ClockWidgetPublishFile)"
@@ -129,6 +134,10 @@
 
     <Copy SourceFiles="@(DriveUsageWidgetPublishFile)"
           DestinationFiles="@(DriveUsageWidgetPublishFile->'$(PublishDir)GlueDock_Widgets\GlueDock.DriveUsageWidget\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+
+    <Copy SourceFiles="@(GlueNotesPublishFile)"
+          DestinationFiles="@(GlueNotesPublishFile->'$(PublishDir)GlueDock_Widgets\GlueNotes\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
 

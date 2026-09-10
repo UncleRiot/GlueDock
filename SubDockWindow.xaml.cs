@@ -37,6 +37,10 @@ public partial class SubDockWindow : Window
     private readonly NativeBackdropHost _nativeBackdropHost;
     private FrameworkElement? _widgetCompanionContent;
 
+    private bool _openSlidePrepared;
+    private double _preparedOpenSlideX;
+    private double _preparedOpenSlideY;
+
     private DockItem? _mouseDownItem;
     private Point _mouseDownPoint;
     private Point _dragPointerOffset;
@@ -113,6 +117,9 @@ public partial class SubDockWindow : Window
 
         InitializeComponent();
         DataContext = this;
+
+        Topmost =
+            _settings.AlwaysOnTop;
 
         _nativeBackdropHost =
             new NativeBackdropHost(
@@ -459,6 +466,22 @@ public partial class SubDockWindow : Window
              scale);
     }
 
+    private static double SnapToDevicePixel(
+        double value,
+        double dpiScale)
+    {
+        if (dpiScale <= 0)
+        {
+            return value;
+        }
+
+        return
+            Math.Round(
+                value * dpiScale,
+                MidpointRounding.AwayFromZero) /
+            dpiScale;
+    }
+
     public void PositionNextTo(
         Rect anchorScreenRect,
         DpiScale anchorDpi)
@@ -475,6 +498,39 @@ public partial class SubDockWindow : Window
         const double baseExpandedThickness = 88;
         const double itemSlotLength = 64;
         const double dockPaddingLength = 20;
+        const double edgeGap = 6;
+
+        int anchorPixelX =
+            (int)Math.Round(
+                (anchorScreenRect.Left +
+                 (anchorScreenRect.Width / 2)) *
+                anchorDpi.DpiScaleX);
+
+        int anchorPixelY =
+            (int)Math.Round(
+                (anchorScreenRect.Top +
+                 (anchorScreenRect.Height / 2)) *
+                anchorDpi.DpiScaleY);
+
+        System.Windows.Forms.Screen screen =
+            System.Windows.Forms.Screen.FromPoint(
+                new System.Drawing.Point(
+                    anchorPixelX,
+                    anchorPixelY));
+
+        System.Drawing.Rectangle pixelArea =
+            screen.WorkingArea;
+
+        Rect area =
+            new(
+                pixelArea.Left /
+                anchorDpi.DpiScaleX,
+                pixelArea.Top /
+                anchorDpi.DpiScaleY,
+                pixelArea.Width /
+                anchorDpi.DpiScaleX,
+                pixelArea.Height /
+                anchorDpi.DpiScaleY);
 
         double itemSpacing =
             Math.Clamp(
@@ -501,19 +557,39 @@ public partial class SubDockWindow : Window
                 1,
                 50);
 
-        int rowCount =
+        int maximumColumnsForScreen =
             Math.Max(
                 1,
-                (int)Math.Ceiling(
-                    Items.Count /
-                    (double)maxColumns));
+                (int)Math.Floor(
+                    Math.Max(
+                        0,
+                        area.Width -
+                        dockPaddingLength -
+                        2) /
+                    Math.Max(
+                        1,
+                        itemLength *
+                        scale)));
 
         int visibleColumns =
             Math.Max(
                 1,
                 Math.Min(
-                    Items.Count,
-                    maxColumns));
+                    Math.Min(
+                        Items.Count,
+                        maxColumns),
+                    maximumColumnsForScreen));
+
+        int rowCount =
+            Math.Max(
+                1,
+                (int)Math.Ceiling(
+                    Items.Count /
+                    (double)visibleColumns));
+
+        SubDockItemsControl.Width =
+            itemLength *
+            visibleColumns;
 
         double width =
             Math.Max(
@@ -558,38 +634,31 @@ public partial class SubDockWindow : Window
                 companionWindowSize.Height;
         }
 
-        Width = width;
-        Height = height;
+        width =
+            Math.Min(
+                width,
+                area.Width);
 
-        int anchorPixelX =
-            (int)Math.Round(
-                anchorScreenRect.X *
+        height =
+            Math.Min(
+                height,
+                area.Height);
+
+        width =
+            SnapToDevicePixel(
+                width,
                 anchorDpi.DpiScaleX);
 
-        int anchorPixelY =
-            (int)Math.Round(
-                anchorScreenRect.Y *
+        height =
+            SnapToDevicePixel(
+                height,
                 anchorDpi.DpiScaleY);
 
-        System.Windows.Forms.Screen screen =
-            System.Windows.Forms.Screen.FromPoint(
-                new System.Drawing.Point(
-                    anchorPixelX,
-                    anchorPixelY));
+        Width =
+            width;
 
-        System.Drawing.Rectangle pixelArea =
-            screen.WorkingArea;
-
-        Rect area =
-            new(
-                pixelArea.Left /
-                anchorDpi.DpiScaleX,
-                pixelArea.Top /
-                anchorDpi.DpiScaleY,
-                pixelArea.Width /
-                anchorDpi.DpiScaleX,
-                pixelArea.Height /
-                anchorDpi.DpiScaleY);
+        Height =
+            height;
 
         double left;
         double top;
@@ -603,10 +672,56 @@ public partial class SubDockWindow : Window
                 (anchorScreenRect.Width / 2) -
                 (width / 2);
 
-            top =
+            if (left < area.Left)
+            {
+                left =
+                    area.Left;
+            }
+            else if (left + width > area.Right)
+            {
+                left =
+                    area.Right -
+                    width;
+            }
+
+            double preferredTop =
                 _rootEdge == DockEdge.Top
-                    ? anchorScreenRect.Bottom + 6
-                    : anchorScreenRect.Top - height - 6;
+                    ? anchorScreenRect.Bottom + edgeGap
+                    : anchorScreenRect.Top - height - edgeGap;
+
+            double alternateTop =
+                _rootEdge == DockEdge.Top
+                    ? anchorScreenRect.Top - height - edgeGap
+                    : anchorScreenRect.Bottom + edgeGap;
+
+            bool preferredFits =
+                preferredTop >= area.Top &&
+                preferredTop + height <= area.Bottom;
+
+            bool alternateFits =
+                alternateTop >= area.Top &&
+                alternateTop + height <= area.Bottom;
+
+            if (preferredFits)
+            {
+                top =
+                    preferredTop;
+            }
+            else if (alternateFits)
+            {
+                top =
+                    alternateTop;
+            }
+            else
+            {
+                top =
+                    Math.Clamp(
+                        preferredTop,
+                        area.Top,
+                        Math.Max(
+                            area.Top,
+                            area.Bottom - height));
+            }
         }
         else
         {
@@ -615,30 +730,69 @@ public partial class SubDockWindow : Window
                 (anchorScreenRect.Height / 2) -
                 (height / 2);
 
-            left =
+            top =
+                Math.Clamp(
+                    top,
+                    area.Top,
+                    Math.Max(
+                        area.Top,
+                        area.Bottom - height));
+
+            double preferredLeft =
                 _rootEdge == DockEdge.Left
-                    ? anchorScreenRect.Right + 6
-                    : anchorScreenRect.Left - width - 6;
+                    ? anchorScreenRect.Right + edgeGap
+                    : anchorScreenRect.Left - width - edgeGap;
+
+            double alternateLeft =
+                _rootEdge == DockEdge.Left
+                    ? anchorScreenRect.Left - width - edgeGap
+                    : anchorScreenRect.Right + edgeGap;
+
+            bool preferredFits =
+                preferredLeft >= area.Left &&
+                preferredLeft + width <= area.Right;
+
+            bool alternateFits =
+                alternateLeft >= area.Left &&
+                alternateLeft + width <= area.Right;
+
+            if (preferredFits)
+            {
+                left =
+                    preferredLeft;
+            }
+            else if (alternateFits)
+            {
+                left =
+                    alternateLeft;
+            }
+            else
+            {
+                left =
+                    Math.Clamp(
+                        preferredLeft,
+                        area.Left,
+                        Math.Max(
+                            area.Left,
+                            area.Right - width));
+            }
         }
 
         left =
-            Math.Clamp(
+            SnapToDevicePixel(
                 left,
-                area.Left,
-                Math.Max(
-                    area.Left,
-                    area.Right - width));
+                anchorDpi.DpiScaleX);
 
         top =
-            Math.Clamp(
+            SnapToDevicePixel(
                 top,
-                area.Top,
-                Math.Max(
-                    area.Top,
-                    area.Bottom - height));
+                anchorDpi.DpiScaleY);
 
-        Left = left;
-        Top = top;
+        Left =
+            left;
+
+        Top =
+            top;
 
         LogSubDockState(
             "PositionNextTo completed");
@@ -655,6 +809,7 @@ public partial class SubDockWindow : Window
         ApplyAppearance();
         UpdateItemLabelVisibility();
         ApplySubDockTooltipSetting();
+
         PlayOpenAnimation();
     }
 
@@ -777,6 +932,9 @@ public partial class SubDockWindow : Window
 
     public void ApplySettingsLive()
     {
+        Topmost =
+            _settings.AlwaysOnTop;
+
         _closeTimer.Interval =
             TimeSpan.FromMilliseconds(
                 Math.Max(
@@ -6120,6 +6278,112 @@ public partial class SubDockWindow : Window
         PlayCloseAnimation();
     }
 
+    private void PrepareOpenSlideStartState()
+    {
+        bool opensBelowAnchor =
+            _hasPositionAnchor &&
+            Top >=
+            _lastAnchorScreenRect.Bottom;
+
+        bool opensAboveAnchor =
+            _hasPositionAnchor &&
+            Top + Height <=
+            _lastAnchorScreenRect.Top;
+
+        bool opensRightOfAnchor =
+            _hasPositionAnchor &&
+            Left >=
+            _lastAnchorScreenRect.Right;
+
+        bool opensLeftOfAnchor =
+            _hasPositionAnchor &&
+            Left + Width <=
+            _lastAnchorScreenRect.Left;
+
+        double horizontalTravel =
+            _hasPositionAnchor
+                ? Math.Max(
+                    24,
+                    _lastAnchorScreenRect.Width)
+                : 24;
+
+        double verticalTravel =
+            _hasPositionAnchor
+                ? Math.Max(
+                    24,
+                    _lastAnchorScreenRect.Height)
+                : 24;
+
+        double startX =
+            0;
+
+        double startY =
+            0;
+
+        if (opensBelowAnchor)
+        {
+            startY =
+                -verticalTravel;
+        }
+        else if (opensAboveAnchor)
+        {
+            startY =
+                verticalTravel;
+        }
+        else if (opensRightOfAnchor)
+        {
+            startX =
+                -horizontalTravel;
+        }
+        else if (opensLeftOfAnchor)
+        {
+            startX =
+                horizontalTravel;
+        }
+        else
+        {
+            switch (_rootEdge)
+            {
+                case DockEdge.Left:
+                    startX =
+                        -horizontalTravel;
+                    break;
+
+                case DockEdge.Right:
+                    startX =
+                        horizontalTravel;
+                    break;
+
+                case DockEdge.Top:
+                    startY =
+                        -verticalTravel;
+                    break;
+
+                default:
+                    startY =
+                        verticalTravel;
+                    break;
+            }
+        }
+
+        _preparedOpenSlideX =
+            startX;
+
+        _preparedOpenSlideY =
+            startY;
+
+        _openSlidePrepared =
+            true;
+
+        SubDockChrome.RenderTransform =
+            new TranslateTransform(
+                startX,
+                startY);
+
+        SubDockChrome.CacheMode =
+            null;
+    }
+
     private void PlayOpenAnimation()
     {
         string animationStyle =
@@ -6136,42 +6400,70 @@ public partial class SubDockWindow : Window
         SubDockChrome.Opacity =
             1;
 
-        SubDockChrome.RenderTransform =
-            Transform.Identity;
+        if (!_openSlidePrepared ||
+            !string.Equals(
+                animationStyle,
+                "Slide",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            SubDockChrome.RenderTransform =
+                Transform.Identity;
+        }
 
         SubDockChrome.RenderTransformOrigin =
             new Point(
                 0.5,
                 0.5);
 
+        SubDockChrome.CacheMode =
+            null;
+
         switch (animationStyle)
         {
             case "Slide":
             {
-                TranslateTransform transform =
-                    new();
+                TranslateTransform transform;
+                double startX;
+                double startY;
 
-                SubDockChrome.CacheMode =
-                    new BitmapCache
-                    {
-                        SnapsToDevicePixels = true
-                    };
+                if (_openSlidePrepared &&
+                    SubDockChrome.RenderTransform is
+                        TranslateTransform preparedTransform)
+                {
+                    transform =
+                        preparedTransform;
 
-                SubDockChrome.RenderTransform =
-                    transform;
+                    startX =
+                        _preparedOpenSlideX;
 
-                double offset =
-                    _rootEdge switch
-                    {
-                        DockEdge.Left => -24,
-                        DockEdge.Right => 24,
-                        DockEdge.Top => -24,
-                        _ => 24
-                    };
+                    startY =
+                        _preparedOpenSlideY;
+
+                    _openSlidePrepared =
+                        false;
+                }
+                else
+                {
+                    PrepareOpenSlideStartState();
+
+                    transform =
+                        (TranslateTransform)SubDockChrome.RenderTransform;
+
+                    startX =
+                        _preparedOpenSlideX;
+
+                    startY =
+                        _preparedOpenSlideY;
+
+                    _openSlidePrepared =
+                        false;
+                }
 
                 DoubleAnimation animation =
                     new(
-                        offset,
+                        startX != 0
+                            ? startX
+                            : startY,
                         0,
                         new Duration(
                             TimeSpan.FromMilliseconds(
@@ -6192,14 +6484,9 @@ public partial class SubDockWindow : Window
                     {
                         SubDockChrome.RenderTransform =
                             Transform.Identity;
-
-                        SubDockChrome.CacheMode =
-                            null;
                     };
 
-                if (_rootEdge is
-                    DockEdge.Left or
-                    DockEdge.Right)
+                if (startX != 0)
                 {
                     transform.BeginAnimation(
                         TranslateTransform.XProperty,
@@ -6343,6 +6630,9 @@ public partial class SubDockWindow : Window
                 0.5,
                 0.5);
 
+        SubDockChrome.CacheMode =
+            null;
+
         void CompleteClose()
         {
             SubDockChrome.BeginAnimation(
@@ -6371,28 +6661,101 @@ public partial class SubDockWindow : Window
                 TranslateTransform transform =
                     new();
 
-                SubDockChrome.CacheMode =
-                    new BitmapCache
-                    {
-                        SnapsToDevicePixels = true
-                    };
-
                 SubDockChrome.RenderTransform =
                     transform;
 
-                double offset =
-                    _rootEdge switch
+                bool opensBelowAnchor =
+                    _hasPositionAnchor &&
+                    Top >=
+                    _lastAnchorScreenRect.Bottom;
+
+                bool opensAboveAnchor =
+                    _hasPositionAnchor &&
+                    Top + Height <=
+                    _lastAnchorScreenRect.Top;
+
+                bool opensRightOfAnchor =
+                    _hasPositionAnchor &&
+                    Left >=
+                    _lastAnchorScreenRect.Right;
+
+                bool opensLeftOfAnchor =
+                    _hasPositionAnchor &&
+                    Left + Width <=
+                    _lastAnchorScreenRect.Left;
+
+                double horizontalTravel =
+                    _hasPositionAnchor
+                        ? Math.Max(
+                            24,
+                            _lastAnchorScreenRect.Width)
+                        : 24;
+
+                double verticalTravel =
+                    _hasPositionAnchor
+                        ? Math.Max(
+                            24,
+                            _lastAnchorScreenRect.Height)
+                        : 24;
+
+                double targetX =
+                    0;
+
+                double targetY =
+                    0;
+
+                if (opensBelowAnchor)
+                {
+                    targetY =
+                        -verticalTravel;
+                }
+                else if (opensAboveAnchor)
+                {
+                    targetY =
+                        verticalTravel;
+                }
+                else if (opensRightOfAnchor)
+                {
+                    targetX =
+                        -horizontalTravel;
+                }
+                else if (opensLeftOfAnchor)
+                {
+                    targetX =
+                        horizontalTravel;
+                }
+                else
+                {
+                    switch (_rootEdge)
                     {
-                        DockEdge.Left => -24,
-                        DockEdge.Right => 24,
-                        DockEdge.Top => -24,
-                        _ => 24
-                    };
+                        case DockEdge.Left:
+                            targetX =
+                                -horizontalTravel;
+                            break;
+
+                        case DockEdge.Right:
+                            targetX =
+                                horizontalTravel;
+                            break;
+
+                        case DockEdge.Top:
+                            targetY =
+                                -verticalTravel;
+                            break;
+
+                        default:
+                            targetY =
+                                verticalTravel;
+                            break;
+                    }
+                }
 
                 DoubleAnimation animation =
                     new(
                         0,
-                        offset,
+                        targetX != 0
+                            ? targetX
+                            : targetY,
                         new Duration(
                             TimeSpan.FromMilliseconds(
                                 200)))
@@ -6413,9 +6776,7 @@ public partial class SubDockWindow : Window
                         CompleteClose();
                     };
 
-                if (_rootEdge is
-                    DockEdge.Left or
-                    DockEdge.Right)
+                if (targetX != 0)
                 {
                     transform.BeginAnimation(
                         TranslateTransform.XProperty,
@@ -7463,7 +7824,8 @@ public partial class SubDockWindow : Window
     {
         if (sender is not MenuItem menuItem ||
             menuItem.Tag is not DockItem item ||
-            !item.IsSubmenu)
+            item.IsRuntimeOnly ||
+            item.IsWidget)
         {
             return;
         }
@@ -7512,7 +7874,8 @@ public partial class SubDockWindow : Window
     {
         if (sender is not MenuItem menuItem ||
             menuItem.Tag is not DockItem item ||
-            !item.IsSubmenu)
+            item.IsRuntimeOnly ||
+            item.IsWidget)
         {
             return;
         }
@@ -7521,8 +7884,13 @@ public partial class SubDockWindow : Window
             string.Empty;
 
         item.Icon =
-            SubmenuIcon.Create(
-                _settings);
+            item.IsSubmenu
+                ? SubmenuIcon.Create(
+                    _settings)
+                : ShellIcon.GetIcon(
+                    item.Path,
+                    _settings.ShowFilePreviews,
+                    _settings.ShortcutOverlayMode);
 
         _save();
     }

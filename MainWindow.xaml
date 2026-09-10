@@ -169,12 +169,17 @@
                                     <MenuItem.Style>
                                         <Style TargetType="MenuItem">
                                             <Setter Property="Visibility"
-                                                    Value="Collapsed" />
+                                                    Value="Visible" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsSubmenu, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsRuntimeOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                              Value="True">
                                                     <Setter Property="Visibility"
-                                                            Value="Visible" />
+                                                            Value="Collapsed" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsWidget, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                             Value="True">
+                                                    <Setter Property="Visibility"
+                                                            Value="Collapsed" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -186,12 +191,17 @@
                                     <MenuItem.Style>
                                         <Style TargetType="MenuItem">
                                             <Setter Property="Visibility"
-                                                    Value="Collapsed" />
+                                                    Value="Visible" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsSubmenu, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsRuntimeOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                              Value="True">
                                                     <Setter Property="Visibility"
-                                                            Value="Visible" />
+                                                            Value="Collapsed" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.IsWidget, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                             Value="True">
+                                                    <Setter Property="Visibility"
+                                                            Value="Collapsed" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Windows;
@@ -551,6 +551,9 @@ public static class WidgetPluginLoader
                         handler =>
                             App.Language.LanguageChanged -=
                                 handler,
+                    GetLanguageCode =
+                        () =>
+                            App.Language.CurrentLanguageCode,
                     OpenSettingsSection =
                         sectionId =>
                             openSettingsSection?.Invoke(

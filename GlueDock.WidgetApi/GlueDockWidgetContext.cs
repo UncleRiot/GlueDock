@@ -1,4 +1,4 @@
-﻿namespace GlueDock;
+namespace GlueDock;
 
 public sealed class GlueDockWidgetContext
 {
@@ -15,6 +15,8 @@ public sealed class GlueDockWidgetContext
     public Action<EventHandler>? SubscribeLanguageChanged { get; init; }
 
     public Action<EventHandler>? UnsubscribeLanguageChanged { get; init; }
+
+    public Func<string>? GetLanguageCode { get; init; }
 
     public Action<string>? OpenSettingsSection { get; init; }
 }
