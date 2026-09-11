@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
@@ -6,11 +6,11 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>GlueNotes</AssemblyName>
+    <AssemblyName>GlueDock.GlueNotesWidget</AssemblyName>
     <RootNamespace>GlueNotes</RootNamespace>
     <DefineConstants>$(DefineConstants);GLUEDOCK_PLUGIN</DefineConstants>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <OutputPath>..\bin\$(Configuration)\net10.0-windows10.0.19041.0\GlueDock_Widgets\GlueNotes\</OutputPath>
+    <OutputPath>..\bin\$(Configuration)\net10.0-windows10.0.19041.0\GlueDock_Widgets\GlueDock.GlueNotesWidget\</OutputPath>
   </PropertyGroup>
 
   <ItemGroup>

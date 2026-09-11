@@ -30,6 +30,60 @@ public static class GlueDockWidgetUiContrast
                 effectiveColor.B));
     }
 
+    public static Brush GetAdaptiveHoverBrush(
+        Brush surfaceBrush,
+        Brush underlayBrush)
+    {
+        Brush opaqueSurfaceBrush =
+            GetOpaqueSurfaceBrush(
+                surfaceBrush,
+                underlayBrush);
+
+        if (!TryGetRepresentativeColor(
+                opaqueSurfaceBrush,
+                out Color color))
+        {
+            return opaqueSurfaceBrush;
+        }
+
+        double luminance =
+            GetRelativeLuminance(
+                color);
+
+        const double adjustment =
+            0.08;
+
+        byte Adjust(
+            byte channel)
+        {
+            double adjusted =
+                luminance < 0.5
+                    ? channel +
+                      ((255 - channel) *
+                       adjustment)
+                    : channel *
+                      (1.0 -
+                       adjustment);
+
+            return
+                (byte)Math.Clamp(
+                    Math.Round(
+                        adjusted),
+                    0,
+                    255);
+        }
+
+        return
+            new SolidColorBrush(
+                Color.FromRgb(
+                    Adjust(
+                        color.R),
+                    Adjust(
+                        color.G),
+                    Adjust(
+                        color.B)));
+    }
+
     public static Brush GetContrastingTextBrush(
         Brush backgroundBrush,
         Brush underlayBrush,

@@ -369,7 +369,9 @@ public sealed class GlueNotesWidget : IGlueDockWidget
                     () =>
                         _context?.OpenSettingsSection?.Invoke(
                             "General"),
-                    _context?.Localize);
+                    _context?.Localize,
+                    SaveSettings,
+                    Log);
         }
         else
         {
@@ -378,7 +380,9 @@ public sealed class GlueNotesWidget : IGlueDockWidget
                     _repository,
                     _language,
                     _settings,
-                    null);
+                    null,
+                    SaveSettings,
+                    Log);
         }
 
         _editorWindow =
@@ -405,8 +409,44 @@ public sealed class GlueNotesWidget : IGlueDockWidget
     private void CommitSettings(
         GlueNotesSettings settings)
     {
+        double? windowLeft =
+            _settings.WindowLeft;
+
+        double? windowTop =
+            _settings.WindowTop;
+
+        double? windowWidth =
+            _settings.WindowWidth;
+
+        double? windowHeight =
+            _settings.WindowHeight;
+
+        bool windowMaximized =
+            _settings.WindowMaximized;
+
+        double leftPaneWidth =
+            _settings.LeftPaneWidth;
+
         _settings.CopyFrom(
             settings);
+
+        _settings.WindowLeft =
+            windowLeft;
+
+        _settings.WindowTop =
+            windowTop;
+
+        _settings.WindowWidth =
+            windowWidth;
+
+        _settings.WindowHeight =
+            windowHeight;
+
+        _settings.WindowMaximized =
+            windowMaximized;
+
+        _settings.LeftPaneWidth =
+            leftPaneWidth;
 
         SaveSettings();
 
@@ -488,6 +528,51 @@ public sealed class GlueNotesWidget : IGlueDockWidget
             {
                 loaded.MaxImageWidth =
                     420;
+            }
+
+            if (!double.IsFinite(
+                    loaded.LeftPaneWidth) ||
+                loaded.LeftPaneWidth <
+                180)
+            {
+                loaded.LeftPaneWidth =
+                    250;
+            }
+
+            if (loaded.WindowWidth is double windowWidth &&
+                (!double.IsFinite(
+                     windowWidth) ||
+                 windowWidth <
+                 760))
+            {
+                loaded.WindowWidth =
+                    null;
+            }
+
+            if (loaded.WindowHeight is double windowHeight &&
+                (!double.IsFinite(
+                     windowHeight) ||
+                 windowHeight <
+                 520))
+            {
+                loaded.WindowHeight =
+                    null;
+            }
+
+            if (loaded.WindowLeft is double windowLeft &&
+                !double.IsFinite(
+                    windowLeft))
+            {
+                loaded.WindowLeft =
+                    null;
+            }
+
+            if (loaded.WindowTop is double windowTop &&
+                !double.IsFinite(
+                    windowTop))
+            {
+                loaded.WindowTop =
+                    null;
             }
 
             loaded.SettingsVersion =

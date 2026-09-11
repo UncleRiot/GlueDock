@@ -165,6 +165,16 @@ public static class DockDialogThemeService
             comboBoxItemStyle);
     }
 
+    public static Brush GetAdaptiveHoverBrush(
+        Brush surfaceBrush,
+        Brush underlayBrush)
+    {
+        return
+            GlueDockWidgetUiContrast.GetAdaptiveHoverBrush(
+                surfaceBrush,
+                underlayBrush);
+    }
+
     // GlueDock UI rule:
     // Dialog/settings opacity is the final effective surface opacity.
     // Theme brush alpha must never reduce the configured dialog opacity a second time.
@@ -707,15 +717,26 @@ public static class DockDialogThemeService
                     true
             };
 
+        Brush hoverBackgroundBrush =
+            GlueDockWidgetUiContrast.GetAdaptiveHoverBrush(
+                palette.ControlBackgroundBrush,
+                palette.WindowBackgroundBrush);
+
+        Brush hoverForegroundBrush =
+            GlueDockWidgetUiContrast.GetContrastingTextBrush(
+                hoverBackgroundBrush,
+                palette.WindowBackgroundBrush,
+                palette.ControlTextBrush);
+
         hoverTrigger.Setters.Add(
             new Setter(
                 Control.BackgroundProperty,
-                palette.ControlBackgroundBrush));
+                hoverBackgroundBrush));
 
         hoverTrigger.Setters.Add(
             new Setter(
                 Control.ForegroundProperty,
-                palette.ControlTextBrush));
+                hoverForegroundBrush));
 
         itemStyle.Triggers.Add(
             hoverTrigger);
@@ -1377,13 +1398,15 @@ public static class DockDialogThemeService
                 foregroundBrush);
 
         Brush hoverBackground =
-            foregroundBrush;
+            GlueDockWidgetUiContrast.GetAdaptiveHoverBrush(
+                backgroundBrush,
+                underlayBrush);
 
         Brush hoverForeground =
             GlueDockWidgetUiContrast.GetContrastingTextBrush(
                 hoverBackground,
-                backgroundBrush,
-                backgroundBrush);
+                underlayBrush,
+                foregroundBrush);
 
         Style style =
             CreateThemedControlStyle(

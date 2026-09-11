@@ -1,8 +1,13 @@
 <Solution>
-  <Project Path="GlueDock.csproj" />
-  <Project Path="GlueDock.WidgetApi\GlueDock.WidgetApi.csproj" />
   <Project Path="GlueDock.ClockWidget\GlueDock.ClockWidget.csproj" />
-  <Project Path="GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj" />
+  <Project Path="GlueDock.csproj">
+    <BuildDependency Project="GlueDock.ClockWidget\GlueDock.ClockWidget.csproj" />
+    <BuildDependency Project="GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj" />
+    <BuildDependency Project="GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj" />
+    <BuildDependency Project="GlueDock.GlueNotesWidget/GlueDock.GlueNotesWidget.csproj" />
+  </Project>
   <Project Path="GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj" />
-  <Project Path="GlueDock.GlueNotesWidget\GlueNotes.csproj" />
+  <Project Path="GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj" />
+  <Project Path="GlueDock.GlueNotesWidget/GlueDock.GlueNotesWidget.csproj" />
+  <Project Path="GlueDock.WidgetApi\GlueDock.WidgetApi.csproj" />
 </Solution>

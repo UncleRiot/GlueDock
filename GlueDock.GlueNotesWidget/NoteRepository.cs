@@ -1,5 +1,5 @@
-using System.IO;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Text.Json;
 using System.Windows.Media.Imaging;
 
@@ -7,6 +7,9 @@ namespace GlueNotes;
 
 public sealed class NoteRepository
 {
+    private const string GroupsFileName =
+        "Groups.json";
+
     private readonly JsonSerializerOptions _jsonOptions =
         new()
         {
@@ -20,6 +23,11 @@ public sealed class NoteRepository
         Path.Combine(
             RootDirectory,
             "Assets");
+
+    private string GroupsFilePath =>
+        Path.Combine(
+            RootDirectory,
+            GroupsFileName);
 
     public NoteRepository(
         string? rootDirectory = null)
@@ -43,7 +51,7 @@ public sealed class NoteRepository
 
     public ObservableCollection<NoteSummary> LoadSummaries()
     {
-        ObservableCollection<NoteSummary> result =
+        List<NoteSummary> result =
             new();
 
         foreach (string filePath in
@@ -52,6 +60,15 @@ public sealed class NoteRepository
                      "*.json",
                      SearchOption.TopDirectoryOnly))
         {
+            if (string.Equals(
+                    Path.GetFileName(
+                        filePath),
+                    GroupsFileName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             try
             {
                 NoteData? note =
@@ -60,7 +77,9 @@ public sealed class NoteRepository
                             filePath),
                         _jsonOptions);
 
-                if (note is null)
+                if (note is null ||
+                    note.Id ==
+                    Guid.Empty)
                 {
                     continue;
                 }
@@ -73,7 +92,11 @@ public sealed class NoteRepository
                         Title =
                             note.Title,
                         UpdatedAtUtc =
-                            note.UpdatedAtUtc
+                            note.UpdatedAtUtc,
+                        GroupId =
+                            note.GroupId,
+                        SortOrder =
+                            note.SortOrder
                     });
             }
             catch
@@ -84,9 +107,55 @@ public sealed class NoteRepository
 
         return
             new ObservableCollection<NoteSummary>(
-                result.OrderByDescending(
-                    note =>
-                        note.UpdatedAtUtc));
+                result
+                    .OrderBy(
+                        note =>
+                            note.SortOrder)
+                    .ThenByDescending(
+                        note =>
+                            note.UpdatedAtUtc));
+    }
+
+    public List<NoteGroupData> LoadGroups()
+    {
+        if (!File.Exists(
+                GroupsFilePath))
+        {
+            return
+                new List<NoteGroupData>();
+        }
+
+        try
+        {
+            return
+                JsonSerializer.Deserialize<List<NoteGroupData>>(
+                    File.ReadAllText(
+                        GroupsFilePath),
+                    _jsonOptions) ??
+                new List<NoteGroupData>();
+        }
+        catch
+        {
+            return
+                new List<NoteGroupData>();
+        }
+    }
+
+    public void SaveGroups(
+        IEnumerable<NoteGroupData> groups)
+    {
+        Directory.CreateDirectory(
+            RootDirectory);
+
+        File.WriteAllText(
+            GroupsFilePath,
+            JsonSerializer.Serialize(
+                groups
+                    .OrderBy(
+                        group =>
+                            group.SortOrder)
+                    .ToList(),
+                _jsonOptions));
     }
 
     public NoteData? Load(
@@ -110,13 +179,17 @@ public sealed class NoteRepository
     }
 
     public void Save(
-        NoteData note)
+        NoteData note,
+        bool updateTimestamp = true)
     {
         Directory.CreateDirectory(
             RootDirectory);
 
-        note.UpdatedAtUtc =
-            DateTime.UtcNow;
+        if (updateTimestamp)
+        {
+            note.UpdatedAtUtc =
+                DateTime.UtcNow;
+        }
 
         File.WriteAllText(
             GetNoteFilePath(
@@ -124,6 +197,60 @@ public sealed class NoteRepository
             JsonSerializer.Serialize(
                 note,
                 _jsonOptions));
+    }
+
+    public void UpdateNoteLocation(
+        Guid noteId,
+        Guid groupId,
+        int sortOrder)
+    {
+        NoteData? note =
+            Load(
+                noteId);
+
+        if (note is null)
+        {
+            return;
+        }
+
+        note.GroupId =
+            groupId;
+
+        note.SortOrder =
+            sortOrder;
+
+        Save(
+            note,
+            false);
+    }
+
+    public void Delete(
+        Guid noteId)
+    {
+        string filePath =
+            GetNoteFilePath(
+                noteId);
+
+        if (File.Exists(
+                filePath))
+        {
+            File.Delete(
+                filePath);
+        }
+
+        string noteAssetDirectory =
+            Path.Combine(
+                AssetsDirectory,
+                noteId.ToString(
+                    "N"));
+
+        if (Directory.Exists(
+                noteAssetDirectory))
+        {
+            Directory.Delete(
+                noteAssetDirectory,
+                true);
+        }
     }
 
     public string ImportClipboardImage(

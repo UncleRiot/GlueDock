@@ -239,6 +239,14 @@ public sealed class DocumentConverter
                                     : 14
                         };
 
+                    if (!string.IsNullOrWhiteSpace(
+                            runData.FontFamilyName))
+                    {
+                        run.FontFamily =
+                            new System.Windows.Media.FontFamily(
+                                runData.FontFamilyName);
+                    }
+
                     if (runData.Underline)
                     {
                         run.TextDecorations =
@@ -247,10 +255,18 @@ public sealed class DocumentConverter
 
                     if (TryParseBrush(
                             runData.ForegroundHex,
-                            out System.Windows.Media.Brush? brush))
+                            out System.Windows.Media.Brush? foregroundBrush))
                     {
                         run.Foreground =
-                            brush;
+                            foregroundBrush;
+                    }
+
+                    if (TryParseBrush(
+                            runData.BackgroundHex,
+                            out System.Windows.Media.Brush? backgroundBrush))
+                    {
+                        run.Background =
+                            backgroundBrush;
                     }
 
                     paragraph.Inlines.Add(
@@ -311,9 +327,14 @@ public sealed class DocumentConverter
                         true,
                     FontSize =
                         run.FontSize,
+                    FontFamilyName =
+                        run.FontFamily?.Source,
                     ForegroundHex =
                         BrushToHex(
-                            run.Foreground)
+                            run.Foreground),
+                    BackgroundHex =
+                        BrushToHex(
+                            run.Background)
                 });
 
             return;

@@ -63,9 +63,10 @@
                     <ListBoxItem x:Name="AppearanceNavigationItem" Tag="1"/>
                     <ListBoxItem x:Name="BehaviorNavigationItem" Tag="2"/>
                     <ListBoxItem x:Name="DockNavigationItem" Tag="3"/>
-                    <ListBoxItem x:Name="WidgetsNavigationItem" Tag="4"/>
-                    <ListBoxItem x:Name="ProfilesNavigationItem" Tag="5"/>
+                    <ListBoxItem x:Name="ProfilesNavigationItem" Tag="4"/>
+                    <ListBoxItem x:Name="BackupRestoreNavigationItem" Tag="5"/>
                     <ListBoxItem x:Name="AdvancedNavigationItem" Tag="6"/>
+                    <ListBoxItem x:Name="WidgetsNavigationItem" Tag="7"/>
                 </ListBox>
 
                 <Grid Grid.Row="2" Margin="0,12,0,0">
@@ -114,15 +115,6 @@
                         <CheckBox x:Name="StartWithWindowsCheckBox" Margin="0,4,0,8" Checked="StartWithWindowsCheckBox_Changed" Unchecked="StartWithWindowsCheckBox_Changed"/>
 
                         <CheckBox x:Name="AlwaysOnTopCheckBox" Margin="0,4,0,8" Checked="AlwaysOnTopCheckBox_Changed" Unchecked="AlwaysOnTopCheckBox_Changed"/>
-
-                        <TextBlock x:Name="BackupRestoreLabel" FontWeight="SemiBold" Margin="0,0,0,8"/>
-
-                        <TextBlock x:Name="BackupRestoreInfoText" Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,12"/>
-
-                        <WrapPanel Margin="0,0,0,18">
-                            <Button x:Name="CreateBackupButton" Width="130" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" Click="CreateBackupButton_Click"/>
-                            <Button x:Name="RestoreBackupButton" Width="130" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Click="RestoreBackupButton_Click"/>
-                        </WrapPanel>
 
                         </StackPanel></ScrollViewer>
             </TabItem>
@@ -526,6 +518,81 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem x:Name="ProfilesTab">
+                <Grid Margin="18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock x:Name="ProfilesInfoText" TextWrapping="Wrap" Margin="0,4,0,12"/>
+
+                    <ListBox x:Name="ProfilesListBox" Grid.Row="1" MinHeight="180" HorizontalContentAlignment="Stretch" SelectionChanged="ProfilesListBox_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="4,5">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Summary}" Opacity="0.72" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+                        <Button x:Name="NewProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="NewProfileButton_Click"/>
+                        <Button x:Name="SaveProfileButton" Width="110" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="SaveProfileButton_Click"/>
+                        <Button x:Name="RenameProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="RenameProfileButton_Click"/>
+                        <Button x:Name="DeleteProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="DeleteProfileButton_Click"/>
+                    </WrapPanel>
+
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button x:Name="CancelProfilePreviewButton" Width="120" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" IsEnabled="False" Click="CancelProfilePreviewButton_Click"/>
+                        <Button x:Name="ApplyProfileButton" Width="100" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" IsEnabled="False" Click="ApplyProfileButton_Click"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="BackupRestoreTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18">
+                        <TextBlock x:Name="BackupRestoreInfoText" Opacity="0.75" TextWrapping="Wrap" Margin="0,4,0,12"/>
+
+                        <WrapPanel>
+                            <Button x:Name="CreateBackupButton" Width="130" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" Click="CreateBackupButton_Click"/>
+                            <Button x:Name="RestoreBackupButton" Width="130" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Click="RestoreBackupButton_Click"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="AdvancedTab">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18">
+                        <CheckBox x:Name="DebugLoggingCheckBox" Margin="0,4,0,12" Checked="DebugLoggingCheckBox_Changed" Unchecked="DebugLoggingCheckBox_Changed"/>
+
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
+                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock x:Name="DebugLogMaxSizeLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
+
+                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Slider x:Name="DebugLogMaxSizeSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="1" Maximum="10" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="DebugLogMaxSizeSlider_ValueChanged"/>
+                                <TextBlock x:Name="DebugLogMaxSizeText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock x:Name="DebugLoggingInfoText" Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,18"/>
+
+                        </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        
             <TabItem x:Name="WidgetsTab">
                 <Grid Margin="18">
                     <Grid.RowDefinitions>
@@ -585,68 +652,6 @@
                 </Grid>
             </TabItem>
 
-            <TabItem x:Name="ProfilesTab">
-                <Grid Margin="18">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock x:Name="ProfilesInfoText" TextWrapping="Wrap" Margin="0,4,0,12"/>
-
-                    <ListBox x:Name="ProfilesListBox" Grid.Row="1" MinHeight="180" HorizontalContentAlignment="Stretch" SelectionChanged="ProfilesListBox_SelectionChanged">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="4,5">
-                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding Summary}" Opacity="0.72" Margin="0,2,0,0" TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-
-                    <WrapPanel Grid.Row="2" Margin="0,12,0,0">
-                        <Button x:Name="NewProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="NewProfileButton_Click"/>
-                        <Button x:Name="SaveProfileButton" Width="110" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="SaveProfileButton_Click"/>
-                        <Button x:Name="RenameProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="RenameProfileButton_Click"/>
-                        <Button x:Name="DeleteProfileButton" Width="95" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,8" Click="DeleteProfileButton_Click"/>
-                    </WrapPanel>
-
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                        <Button x:Name="CancelProfilePreviewButton" Width="120" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" Margin="0,0,8,0" IsEnabled="False" Click="CancelProfilePreviewButton_Click"/>
-                        <Button x:Name="ApplyProfileButton" Width="100" Height="{x:Static dialogTheme:DockDialogTheme.StandardControlHeight}" IsEnabled="False" Click="ApplyProfileButton_Click"/>
-                    </StackPanel>
-                </Grid>
-            </TabItem>
-
-            <TabItem x:Name="AdvancedTab">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Margin="18">
-                        <CheckBox x:Name="DebugLoggingCheckBox" Margin="0,4,0,12" Checked="DebugLoggingCheckBox_Changed" Unchecked="DebugLoggingCheckBox_Changed"/>
-
-                        <Grid Margin="0,4,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.LabelColumnWidth}"/>
-                                <ColumnDefinition Width="{x:Static dialogTheme:DockDialogTheme.SecondaryColumnWidth}"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock x:Name="DebugLogMaxSizeLabel" FontWeight="SemiBold" VerticalAlignment="Center"/>
-
-                            <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Slider x:Name="DebugLogMaxSizeSlider" Width="{x:Static dialogTheme:DockDialogTheme.SliderWidth}" Minimum="1" Maximum="10" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="DebugLogMaxSizeSlider_ValueChanged"/>
-                                <TextBlock x:Name="DebugLogMaxSizeText" Width="90" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <TextBlock x:Name="DebugLoggingInfoText" Opacity="0.75" TextWrapping="Wrap" Margin="0,0,0,18"/>
-
-                        </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-        
         </TabControl>
         <Button x:Name="CloseButton" Grid.Column="1" Grid.Row="1" Width="100" Padding="10,6" Margin="0,14,0,0" HorizontalAlignment="Right" Click="CloseButton_Click"/>
                 </Grid>

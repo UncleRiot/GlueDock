@@ -2,7 +2,7 @@ namespace GlueNotes;
 
 public sealed class GlueNotesSettings
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 4;
 
     public int SettingsVersion { get; set; } =
         CurrentVersion;
@@ -30,6 +30,20 @@ public sealed class GlueNotesSettings
     public double MaxImageWidth { get; set; } =
         420;
 
+
+    public double? WindowLeft { get; set; }
+
+    public double? WindowTop { get; set; }
+
+    public double? WindowWidth { get; set; }
+
+    public double? WindowHeight { get; set; }
+
+    public bool WindowMaximized { get; set; }
+
+    public double LeftPaneWidth { get; set; } =
+        250;
+
     public GlueNotesSettings Clone()
     {
         return new GlueNotesSettings
@@ -51,7 +65,19 @@ public sealed class GlueNotesSettings
             AutoSaveDelayMilliseconds =
                 AutoSaveDelayMilliseconds,
             MaxImageWidth =
-                MaxImageWidth
+                MaxImageWidth,
+            WindowLeft =
+                WindowLeft,
+            WindowTop =
+                WindowTop,
+            WindowWidth =
+                WindowWidth,
+            WindowHeight =
+                WindowHeight,
+            WindowMaximized =
+                WindowMaximized,
+            LeftPaneWidth =
+                LeftPaneWidth
         };
     }
 
@@ -84,5 +110,23 @@ public sealed class GlueNotesSettings
 
         MaxImageWidth =
             source.MaxImageWidth;
+
+        WindowLeft =
+            source.WindowLeft;
+
+        WindowTop =
+            source.WindowTop;
+
+        WindowWidth =
+            source.WindowWidth;
+
+        WindowHeight =
+            source.WindowHeight;
+
+        WindowMaximized =
+            source.WindowMaximized;
+
+        LeftPaneWidth =
+            source.LeftPaneWidth;
     }
 }

@@ -2695,14 +2695,17 @@ public partial class SettingsWindow : Window
         DockNavigationItem.Content =
             _language["Settings.Tab.SubDock"];
 
-        WidgetsNavigationItem.Content =
-            _language["Settings.Tab.Widgets"];
-
         ProfilesNavigationItem.Content =
             _language["Settings.Tab.Profiles"];
 
+        BackupRestoreNavigationItem.Content =
+            _language["Settings.BackupRestore.Title"];
+
         AdvancedNavigationItem.Content =
             _language["Settings.Tab.Advanced"];
+
+        WidgetsNavigationItem.Content =
+            _language["Settings.Tab.Widgets"];
 
         GeneralTab.Header =
             _language["Settings.Tab.General"];
@@ -2716,14 +2719,17 @@ public partial class SettingsWindow : Window
         DockTab.Header =
             _language["Settings.Tab.SubDock"];
 
-        WidgetsTab.Header =
-            _language["Settings.Tab.Widgets"];
-
         ProfilesTab.Header =
             _language["Settings.Tab.Profiles"];
 
+        BackupRestoreTab.Header =
+            _language["Settings.BackupRestore.Title"];
+
         AdvancedTab.Header =
             _language["Settings.Tab.Advanced"];
+
+        WidgetsTab.Header =
+            _language["Settings.Tab.Widgets"];
 
         foreach (KeyValuePair<System.Windows.Controls.TextBlock, string> navigationEntry in
                  _widgetNavigationLocalizationKeys)
@@ -2968,9 +2974,6 @@ public partial class SettingsWindow : Window
 
         DebugLogMaxSizeLabel.Text =
             _language["Settings.DebugLogMaxSize"];
-
-        BackupRestoreLabel.Text =
-            _language["Settings.BackupRestore.Title"];
 
         BackupRestoreInfoText.Text =
             _language["Settings.BackupRestore.Info"];

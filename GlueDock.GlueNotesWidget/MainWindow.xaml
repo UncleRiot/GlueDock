@@ -1,6 +1,7 @@
 <Window x:Class="GlueNotes.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:GlueNotes"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title=""
         Width="980"
@@ -9,6 +10,7 @@
         MinHeight="520"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
+        ResizeMode="CanResizeWithGrip"
         AllowsTransparency="True"
         Background="Transparent">
     <Window.Resources>
@@ -16,12 +18,38 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="GlueNotesTheme.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <ContextMenu x:Key="GlueNotesTextEditContextMenu"
+                         x:Shared="False"
+                         Style="{StaticResource {x:Type ContextMenu}}"
+                         Opened="TextEditContextMenu_Opened">
+                <MenuItem Command="ApplicationCommands.Undo"
+                          Style="{StaticResource {x:Type MenuItem}}"
+                          CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+                <MenuItem Command="ApplicationCommands.Redo"
+                          Style="{StaticResource {x:Type MenuItem}}"
+                          CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+                <Separator />
+                <MenuItem Command="ApplicationCommands.Cut"
+                          Style="{StaticResource {x:Type MenuItem}}"
+                          CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+                <MenuItem Command="ApplicationCommands.Copy"
+                          Style="{StaticResource {x:Type MenuItem}}"
+                          CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+                <MenuItem Command="ApplicationCommands.Paste"
+                          Style="{StaticResource {x:Type MenuItem}}"
+                          CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+                <Separator />
+                <MenuItem Command="ApplicationCommands.SelectAll"
+                          Style="{StaticResource {x:Type MenuItem}}"
+                          CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+            </ContextMenu>
         </ResourceDictionary>
     </Window.Resources>
 
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="30"
-                            ResizeBorderThickness="6"
+                            ResizeBorderThickness="10"
                             CornerRadius="0"
                             GlassFrameThickness="0"
                             UseAeroCaptionButtons="False" />
@@ -92,8 +120,10 @@
             <Grid Grid.Row="1"
                   Margin="16,4,16,16">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="250" />
-                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition x:Name="LeftPaneColumn"
+                                      Width="250"
+                                      MinWidth="180" />
+                    <ColumnDefinition Width="10" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
@@ -114,15 +144,24 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock x:Name="NotesHeaderText"
+                            <TextBlock x:Name="GroupsHeaderText"
                                        FontSize="14"
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
 
-                            <Button x:Name="NewNoteButton"
+                            <Button x:Name="NewGroupButton"
                                     Grid.Column="1"
+                                    MinWidth="84"
+                                    Height="26"
+                                    Margin="0,0,4,0"
+                                    Padding="8,0"
+                                    Click="NewGroupButton_Click" />
+
+                            <Button x:Name="NewNoteButton"
+                                    Grid.Column="2"
                                     Width="34"
                                     Height="26"
                                     Padding="0"
@@ -132,22 +171,201 @@
                         </Grid>
 
                         <Grid Grid.Row="2">
-                            <ListBox x:Name="NotesListBox"
-                                     SelectionChanged="NotesListBox_SelectionChanged">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel>
+                            <TreeView x:Name="NotesTreeView"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      Foreground="{DynamicResource GlueNotesTextBrush}"
+                                      HorizontalContentAlignment="Stretch"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      ScrollViewer.CanContentScroll="True"
+                                      ClipToBounds="True"
+                                      AllowDrop="True"
+                                      PreviewMouseLeftButtonDown="NotesTreeView_PreviewMouseLeftButtonDown"
+                                      PreviewMouseRightButtonDown="NotesTreeView_PreviewMouseRightButtonDown"
+                                      PreviewMouseMove="NotesTreeView_PreviewMouseMove"
+                                      DragOver="NotesTreeView_DragOver"
+                                      Drop="NotesTreeView_Drop"
+                                      SelectedItemChanged="NotesTreeView_SelectedItemChanged">
+                                <TreeView.ContextMenu>
+                                    <ContextMenu Style="{StaticResource {x:Type ContextMenu}}"
+                                                 Opened="NotesTreeContextMenu_Opened">
+                                        <MenuItem x:Name="ContextNewNoteMenuItem"
+                                                  Style="{StaticResource {x:Type MenuItem}}"
+                                                  Click="ContextNewNoteMenuItem_Click" />
+                                        <MenuItem x:Name="ContextNewGroupMenuItem"
+                                                  Style="{StaticResource {x:Type MenuItem}}"
+                                                  Click="ContextNewGroupMenuItem_Click" />
+                                        <Separator />
+                                        <MenuItem x:Name="ContextDeleteMenuItem"
+                                                  Style="{StaticResource {x:Type MenuItem}}"
+                                                  Click="ContextDeleteMenuItem_Click" />
+                                    </ContextMenu>
+                                </TreeView.ContextMenu>
+                                <TreeView.Resources>
+                                    <Style TargetType="{x:Type TreeViewItem}">
+                                        <Setter Property="Foreground"
+                                                Value="{DynamicResource GlueNotesTextBrush}" />
+                                        <Setter Property="Background"
+                                                Value="Transparent" />
+                                        <Setter Property="IsExpanded"
+                                                Value="True" />
+                                        <Setter Property="Padding"
+                                                Value="2" />
+                                        <Setter Property="Margin"
+                                                Value="0" />
+                                        <Style.Triggers>
+                                            <Trigger Property="IsSelected"
+                                                     Value="True">
+                                                <Setter Property="Background"
+                                                        Value="Transparent" />
+                                            </Trigger>
+                                            <DataTrigger Binding="{Binding IsDropPreviewBefore}"
+                                                         Value="True">
+                                                <Setter Property="Padding"
+                                                        Value="2,10,2,2" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsDropPreviewAfter}"
+                                                         Value="True">
+                                                <Setter Property="Padding"
+                                                        Value="2,2,2,10" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+
+                                    <HierarchicalDataTemplate DataType="{x:Type local:NoteGroupViewModel}"
+                                                              ItemsSource="{Binding Notes}">
+                                        <Border Padding="2,1,2,3"
+                                                BorderBrush="{Binding ColorBrush}"
+                                                AllowDrop="True"
+                                                PreviewDragOver="GroupHeader_PreviewDragOver"
+                                                PreviewDrop="GroupHeader_PreviewDrop">
+                                            <Border.Style>
+                                                <Style TargetType="{x:Type Border}">
+                                                    <Setter Property="Background"
+                                                            Value="Transparent" />
+                                                    <Setter Property="Margin"
+                                                            Value="0,2,0,2" />
+                                                    <Setter Property="BorderThickness"
+                                                            Value="0" />
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsMouseOver"
+                                                                 Value="True">
+                                                            <Setter Property="Background"
+                                                                    Value="{DynamicResource GlueNotesSurfaceHoverBrush}" />
+                                                        </Trigger>
+                                                        <DataTrigger Binding="{Binding IsActive}"
+                                                                     Value="True">
+                                                            <Setter Property="BorderThickness"
+                                                                    Value="0,0,0,1" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDropPreviewBefore}"
+                                                                     Value="True">
+                                                            <Setter Property="BorderThickness"
+                                                                    Value="0,2,0,0" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDropPreviewAfter}"
+                                                                     Value="True">
+                                                            <Setter Property="BorderThickness"
+                                                                    Value="0,0,0,2" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <Button Width="18"
+                                                        Height="18"
+                                                        MinWidth="18"
+                                                        Margin="0,0,5,0"
+                                                        Padding="2"
+                                                        ToolTip="{DynamicResource GlueNotesGroupColorToolTip}"
+                                                        Click="GroupColorButton_Click">
+                                                    <Border Width="10"
+                                                            Height="10"
+                                                            Background="{Binding ColorBrush}"
+                                                            BorderBrush="{DynamicResource GlueNotesBorderBrush}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="2" />
+                                                </Button>
+
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                         FontWeight="SemiBold"
+                                                         Padding="2,0"
+                                                         BorderThickness="0"
+                                                         Background="Transparent"
+                                                         Foreground="{DynamicResource GlueNotesTextBrush}"
+                                                         CaretBrush="{DynamicResource GlueNotesTextBrush}"
+                                                         SelectionBrush="{DynamicResource GlueNotesAccentBrush}"
+                                                         Cursor="IBeam"
+                                                         ContextMenuOpening="GroupNameTextBox_ContextMenuOpening"
+                                                         GotKeyboardFocus="GroupNameTextBox_GotKeyboardFocus"
+                                                         LostFocus="GroupNameTextBox_LostFocus"
+                                                         KeyDown="GroupNameTextBox_KeyDown" />
+                                            </Grid>
+                                        </Border>
+                                    </HierarchicalDataTemplate>
+
+                                    <DataTemplate DataType="{x:Type local:NoteSummary}">
+                                        <Border Padding="2,1"
+                                                BorderBrush="{DynamicResource GlueNotesAccentBrush}">
+                                            <Border.Style>
+                                                <Style TargetType="{x:Type Border}">
+                                                    <Setter Property="Background"
+                                                            Value="Transparent" />
+                                                    <Setter Property="Margin"
+                                                            Value="0" />
+                                                    <Setter Property="BorderThickness"
+                                                            Value="0" />
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsMouseOver"
+                                                                 Value="True">
+                                                            <Setter Property="Background"
+                                                                    Value="{DynamicResource GlueNotesSurfaceHoverBrush}" />
+                                                        </Trigger>
+                                                        <DataTrigger Binding="{Binding IsDropPreviewBefore}"
+                                                                     Value="True">
+                                                            <Setter Property="BorderThickness"
+                                                                    Value="0,2,0,0" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDropPreviewAfter}"
+                                                                     Value="True">
+                                                            <Setter Property="BorderThickness"
+                                                                    Value="0,0,0,2" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+
                                             <TextBlock Text="{Binding Title}"
-                                                       FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding UpdatedAtLocal, StringFormat={}{0:g}}"
-                                                       Margin="0,3,0,0"
-                                                       FontSize="11"
-                                                       Foreground="{DynamicResource GlueNotesMutedTextBrush}" />
-                                        </StackPanel>
+                                                       ToolTip="{Binding UpdatedAtHint}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="NoWrap"
+                                                       VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="{x:Type TextBlock}">
+                                                        <Setter Property="TextDecorations"
+                                                                Value="{x:Null}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType={x:Type TreeViewItem}}, Path=IsSelected}"
+                                                                         Value="True">
+                                                                <Setter Property="TextDecorations"
+                                                                        Value="Underline" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Border>
                                     </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                                </TreeView.Resources>
+                            </TreeView>
 
                             <TextBlock x:Name="EmptyNotesText"
                                        HorizontalAlignment="Center"
@@ -157,6 +375,17 @@
                         </Grid>
                     </Grid>
                 </Border>
+
+                <GridSplitter x:Name="LeftPaneSplitter"
+                              Grid.Column="1"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              ResizeDirection="Columns"
+                              ResizeBehavior="PreviousAndNext"
+                              ShowsPreview="False"
+                              Background="Transparent"
+                              Cursor="SizeWE"
+                              DragCompleted="LeftPaneSplitter_DragCompleted" />
 
                 <Border Grid.Column="2"
                         Padding="12"
@@ -177,6 +406,7 @@
                         <TextBox x:Name="TitleTextBox"
                                  FontSize="18"
                                  FontWeight="SemiBold"
+                                 ContextMenu="{StaticResource GlueNotesTextEditContextMenu}"
                                  TextChanged="TitleTextBox_TextChanged" />
 
                         <WrapPanel Grid.Row="2">
@@ -203,34 +433,111 @@
                                     Content="U"
                                     Click="UnderlineButton_Click" />
 
+                            <ComboBox x:Name="FontFamilyComboBox"
+                                      Width="150"
+                                      Height="30"
+                                      Margin="0,0,6,0"
+                                      SelectionChanged="FontFamilyComboBox_SelectionChanged" />
+
                             <ComboBox x:Name="FontSizeComboBox"
                                       Width="72"
                                       Height="30"
                                       Margin="0,0,6,0"
                                       SelectionChanged="FontSizeComboBox_SelectionChanged" />
 
-                            <Button x:Name="TextColorButton"
-                                    Width="34"
-                                    Height="26"
-                                    Margin="0,0,10,0"
-                                    Padding="6"
-                                    Click="TextColorButton_Click">
-                                <Border x:Name="TextColorPreview"
-                                        Width="14"
-                                        Height="14"
-                                        Background="{DynamicResource GlueNotesTextBrush}"
-                                        BorderBrush="{DynamicResource GlueNotesBorderBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="2" />
-                            </Button>
+                            <Grid Width="42"
+                                  Height="26"
+                                  Margin="0,0,6,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="30" />
+                                    <ColumnDefinition Width="12" />
+                                </Grid.ColumnDefinitions>
+
+                                <Button x:Name="TextColorButton"
+                                        Grid.Column="0"
+                                        Height="26"
+                                        MinWidth="30"
+                                        Padding="0"
+                                        Click="TextColorButton_Click">
+                                    <Grid Width="16"
+                                          Height="18">
+                                        <TextBlock Text="A"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Top"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                                        <Border x:Name="TextColorPreview"
+                                                Height="3"
+                                                VerticalAlignment="Bottom"
+                                                Background="{DynamicResource GlueNotesTextBrush}" />
+                                    </Grid>
+                                </Button>
+
+                                <Button x:Name="TextColorDropDownButton"
+                                        Grid.Column="1"
+                                        Width="12"
+                                        Height="26"
+                                        MinWidth="12"
+                                        Padding="0"
+                                        FontSize="9"
+                                        Content="▾"
+                                        Click="TextColorDropDownButton_Click" />
+                            </Grid>
+
+                            <Grid Width="42"
+                                  Height="26"
+                                  Margin="0,0,6,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="30" />
+                                    <ColumnDefinition Width="12" />
+                                </Grid.ColumnDefinitions>
+
+                                <Button x:Name="HighlightColorButton"
+                                        Grid.Column="0"
+                                        Height="26"
+                                        MinWidth="30"
+                                        Padding="0"
+                                        Click="HighlightColorButton_Click">
+                                    <Grid Width="16"
+                                          Height="18">
+                                        <TextBlock Text="🖍"
+                                                   FontSize="11"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Top"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" />
+                                        <Border x:Name="HighlightColorPreview"
+                                                Height="3"
+                                                VerticalAlignment="Bottom"
+                                                Background="Yellow" />
+                                    </Grid>
+                                </Button>
+
+                                <Button x:Name="HighlightColorDropDownButton"
+                                        Grid.Column="1"
+                                        Width="12"
+                                        Height="26"
+                                        MinWidth="12"
+                                        Padding="0"
+                                        FontSize="9"
+                                        Content="▾"
+                                        Click="HighlightColorDropDownButton_Click" />
+                            </Grid>
 
                             <Button x:Name="InsertChecklistButton"
                                     Width="34"
                                     Height="26"
+                                    Margin="0,0,6,0"
                                     Padding="0"
                                     FontFamily="Segoe MDL2 Assets"
                                     Content=""
                                     Click="InsertChecklistButton_Click" />
+
+                            <Button x:Name="ExportButton"
+                                    Width="34"
+                                    Height="26"
+                                    Padding="0"
+                                    FontSize="11"
+                                    Content="💾"
+                                    Click="ExportButton_Click" />
                         </WrapPanel>
 
                         <RichTextBox x:Name="EditorRichTextBox"
@@ -243,6 +550,7 @@
                                      AcceptsTab="True"
                                      IsDocumentEnabled="True"
                                      VerticalScrollBarVisibility="Auto"
+                                     ContextMenu="{StaticResource GlueNotesTextEditContextMenu}"
                                      DataObject.Pasting="EditorRichTextBox_Pasting"
                                      SelectionChanged="EditorRichTextBox_SelectionChanged"
                                      TextChanged="EditorRichTextBox_TextChanged" />
@@ -257,5 +565,25 @@
                 </Border>
             </Grid>
         </Grid>
+
+        <Border Width="44"
+        Height="44"
+        HorizontalAlignment="Right"
+        VerticalAlignment="Bottom"
+        Background="Transparent"
+        Cursor="SizeNWSE"
+        shell:WindowChrome.ResizeGripDirection="BottomRight"
+        shell:WindowChrome.IsHitTestVisibleInChrome="False">
+            <Path Width="12"
+          Height="12"
+          Margin="0,0,4,4"
+          HorizontalAlignment="Right"
+          VerticalAlignment="Bottom"
+          Stroke="{DynamicResource GlueNotesMutedTextBrush}"
+          StrokeThickness="1"
+          StrokeStartLineCap="Square"
+          StrokeEndLineCap="Square"
+          Data="M 3,11 L 11,3 M 7,11 L 11,7" />
+        </Border>
     </Grid>
 </Window>

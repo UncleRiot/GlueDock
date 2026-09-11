@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -11,10 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>GlueDock</AssemblyName>
     <RootNamespace>GlueDock</RootNamespace>
-    <Version>0.0.440-alpha.1</Version>
-    <AssemblyVersion>0.0.440.0</AssemblyVersion>
-    <FileVersion>0.0.440.0</FileVersion>
-    <InformationalVersion>0.0.440-alpha.1</InformationalVersion>
+    <Version>0.0.461-alpha.1</Version>
+    <AssemblyVersion>0.0.461.0</AssemblyVersion>
+    <FileVersion>0.0.461.0</FileVersion>
+    <InformationalVersion>0.0.461-alpha.1</InformationalVersion>
     <Authors>Daniel Capilla</Authors>
     <Company>Daniel Capilla</Company>
     <Product>GlueDock</Product>
@@ -92,16 +92,16 @@
              Properties="Configuration=$(Configuration);Platform=$(Platform);TargetFramework=$(TargetFramework);GlueDockPublishRebuild=false" />
   </Target>
 
-  <Target Name="BuildBundledWidgets"
-          BeforeTargets="Publish">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\GlueDock.ClockWidget\GlueDock.ClockWidget.csproj;
-                       $(MSBuildProjectDirectory)\GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj;
-                       $(MSBuildProjectDirectory)\GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj;
-                       $(MSBuildProjectDirectory)\GlueDock.GlueNotesWidget\GlueNotes.csproj"
-             Targets="Build"
-             BuildInParallel="true"
-             Properties="Configuration=$(Configuration)" />
-  </Target>
+	<Target Name="BuildBundledWidgets"
+		  BeforeTargets="Publish">
+		<MSBuild Projects="$(MSBuildProjectDirectory)\GlueDock.ClockWidget\GlueDock.ClockWidget.csproj;
+                     $(MSBuildProjectDirectory)\GlueDock.DesktopOverlayWidget\GlueDock.DesktopOverlayWidget.csproj;
+                     $(MSBuildProjectDirectory)\GlueDock.DriveUsageWidget\GlueDock.DriveUsageWidget.csproj;
+                     $(MSBuildProjectDirectory)\GlueDock.GlueNotesWidget\GlueDock.GlueNotesWidget.csproj"
+				 Targets="Build"
+				 BuildInParallel="true"
+				 Properties="Configuration=$(Configuration)" />
+	</Target>
 
   <Target Name="PreparePublishedRuntimeFolders"
           AfterTargets="Publish">
@@ -121,7 +121,7 @@
       <ClockWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.ClockWidget\**\*" />
       <DesktopOverlayWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.DesktopOverlayWidget\**\*" />
       <DriveUsageWidgetPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.DriveUsageWidget\**\*" />
-      <GlueNotesPublishFile Include="$(BundledWidgetOutputRoot)\GlueNotes\**\*" />
+      <GlueNotesPublishFile Include="$(BundledWidgetOutputRoot)\GlueDock.GlueNotesWidget\**\*" />
     </ItemGroup>
 
     <Copy SourceFiles="@(ClockWidgetPublishFile)"
@@ -137,7 +137,7 @@
           SkipUnchangedFiles="true" />
 
     <Copy SourceFiles="@(GlueNotesPublishFile)"
-          DestinationFiles="@(GlueNotesPublishFile->'$(PublishDir)GlueDock_Widgets\GlueNotes\%(RecursiveDir)%(Filename)%(Extension)')"
+          DestinationFiles="@(GlueNotesPublishFile->'$(PublishDir)GlueDock_Widgets\GlueDock.GlueNotesWidget\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
 
